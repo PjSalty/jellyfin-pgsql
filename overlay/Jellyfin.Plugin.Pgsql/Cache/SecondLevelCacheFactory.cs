@@ -75,7 +75,13 @@ public static class SecondLevelCacheFactory
                     TimeSpan.FromMinutes(config.TtlMinutes),
                     config.ExcludedTables.ToArray())
                 .UseCacheKeyPrefix(config.KeyPrefix)
-                .UseDbCallsIfCachingProviderIsDown(TimeSpan.FromSeconds(30))
+
+                // 5s re-probe: a request whose reader the interceptor already
+                // consumed when the cache died errors until the availability
+                // check trips the provider into down mode, so this interval
+                // bounds the visible error window of a cache outage. A dead
+                // cache afterwards means clean uncached operation.
+                .UseDbCallsIfCachingProviderIsDown(TimeSpan.FromSeconds(5))
 
                 // The cacheable event forwards hit/miss/invalidation diagnostics to the
                 // host logger at Information; without it, CACHE_DEBUG only produces

@@ -3,8 +3,13 @@ repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
     hooks:
+      # patches/ carries git-format-patch output where trailing whitespace
+      # (diff context, the "-- " signature line) is semantic; "fixing" it
+      # breaks git am.
       - id: end-of-file-fixer
+        exclude: ^patches/.*\.patch$
       - id: trailing-whitespace
+        exclude: ^patches/.*\.patch$
       - id: check-yaml
         args: [--allow-multiple-documents]
       - id: check-added-large-files
