@@ -8,7 +8,7 @@ This is an overlay build, not a diverged fork: `UPSTREAM_REF` pins the upstream 
 
 The plugin registers an [EFCoreSecondLevelCacheInterceptor](https://github.com/VahidN/EFCoreSecondLevelCacheInterceptor) on the same `DbContextOptionsBuilder` it configures for Npgsql, so every pooled context Jellyfin creates is covered. Query results and their table dependency graph live in Valkey; any write to a table (including `ExecuteUpdate`/`ExecuteDelete` bulk operations) evicts every cached query that touched it, immediately and for every connected Jellyfin instance. There's no per instance memory cache, which is what makes the invalidation global.
 
-Fail open by design: if Valkey is down, queries run against PostgreSQL uncached, a warning is logged, and the cache is re-probed every 30 seconds. The cache is a performance tier, never an availability dependency.
+Fail open by design, with one honest caveat: when Valkey dies, requests already mid-interception can error until the availability probe marks the cache down (5 second re-probe interval), then everything runs uncached against PostgreSQL with a warning logged. A cache outage costs seconds of errors and then latency, never availability.
 
 Security relevant tables are never cached (default exclude list): `Users`, `Permissions`, `Preferences`, `AccessSchedules`, `Devices`, `DeviceOptions`, `ApiKeys`, plus the insert heavy `ActivityLogs`. Token revocation and permission changes always read database truth.
 
