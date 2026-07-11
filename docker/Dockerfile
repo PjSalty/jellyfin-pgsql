@@ -24,6 +24,9 @@ RUN sed -i 's|http://|https://|g' /etc/apt/sources.list.d/debian.sources \
     && echo "deb [signed-by=/usr/share/keyrings/pgdg.asc] https://apt.postgresql.org/pub/repos/apt $(. /etc/os-release && echo "${VERSION_CODENAME}")-pgdg main" \
        > /etc/apt/sources.list.d/pgdg.list \
     && apt-get update \
+    # Pull the distro security point releases the base image predates; the
+    # release Trivy gate fails on fixed-but-unpatched HIGH CVEs otherwise.
+    && apt-get upgrade -y --no-install-recommends \
     && apt-get install -y --no-install-recommends postgresql-client-16 \
     && rm -rf /var/lib/apt/lists/*
 

@@ -1,6 +1,6 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Salty <99386653+PjSalty@users.noreply.github.com>
-Date: Sat, 11 Jul 2026 03:39:26 -0500
+Date: Sat, 11 Jul 2026 06:36:45 -0500
 Subject: [PATCH 2/2] cache: wire the Valkey second level cache into the
  provider
 

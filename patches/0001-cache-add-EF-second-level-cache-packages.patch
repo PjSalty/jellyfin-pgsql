@@ -1,26 +1,24 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Salty <99386653+PjSalty@users.noreply.github.com>
-Date: Sat, 11 Jul 2026 03:39:26 -0500
+Date: Sat, 11 Jul 2026 02:13:43 -0500
 Subject: [PATCH 1/2] cache: add EF second level cache packages
 
 Intent: bring EFCoreSecondLevelCacheInterceptor and its StackExchange.Redis
 provider into the publish output so the provider can cache query results in
 Valkey or Redis.
 Drop when: upstream ships a second level cache of its own.
-Ceiling: pinned at 5.3.7, constrained from both sides. 5.3.8+ moves
-AsyncKeyedLock past the server's own 7.1.8 pin and the host-loaded copy then
-fails the plugin's higher bind (FileLoadException at cache bootstrap).
-5.3.12+ moves StackExchange.Redis to 3.x, colliding with the host
-Microsoft.Extensions 9.0.11 pins (NU1605). Bump only with the server.
+Ceiling: pinned at 5.3.11, the last line on StackExchange.Redis 2.x; 5.3.12+
+requires Microsoft.Extensions 10.x and collides with the host 9.0.11 pins
+(NU1605). Bump together with the server's EF line.
 ---
- .../Jellyfin.Plugin.Pgsql.csproj                  | 15 +++++++++++++++
- 1 file changed, 15 insertions(+)
+ .../Jellyfin.Plugin.Pgsql.csproj               | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
 
 diff --git a/Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj b/Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj
-index a19f066..b45bc0f 100644
+index a19f066..70e5647 100644
 --- a/Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj
 +++ b/Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj
-@@ -37,6 +37,21 @@
+@@ -37,6 +37,24 @@
      </PackageReference>
    </ItemGroup>
  
@@ -37,6 +35,9 @@ index a19f066..b45bc0f 100644
 +         Bump only together with the server's own dependency pins. -->
 +    <PackageReference Include="EFCoreSecondLevelCacheInterceptor" Version="5.3.7" />
 +    <PackageReference Include="EFCoreSecondLevelCacheInterceptor.StackExchange.Redis" Version="5.3.7" />
++    <!-- Direct pin over the 3.1.4 transitive: CVE-2026-48109 (LZ4 decompression),
++         and this cache runs with compression on. Not shipped by the host. -->
++    <PackageReference Include="MessagePack" Version="3.1.7" />
 +  </ItemGroup>
 +
    <ItemGroup>
