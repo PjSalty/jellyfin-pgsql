@@ -1,5 +1,9 @@
 # jellyfin-pgsql
 
+[![ci](https://github.com/PjSalty/jellyfin-pgsql/actions/workflows/ci.yml/badge.svg)](https://github.com/PjSalty/jellyfin-pgsql/actions/workflows/ci.yml)
+[![codeql](https://github.com/PjSalty/jellyfin-pgsql/actions/workflows/codeql.yml/badge.svg)](https://github.com/PjSalty/jellyfin-pgsql/actions/workflows/codeql.yml)
+[![release](https://img.shields.io/github/v/release/PjSalty/jellyfin-pgsql)](https://github.com/PjSalty/jellyfin-pgsql/releases/latest)
+
 [JPVenson/Jellyfin.Pgsql](https://github.com/JPVenson/Jellyfin.Pgsql) plus an EF Core second level cache backed by Valkey (or Redis). PostgreSQL as Jellyfin's database, with repeated queries served from a shared cache instead of hitting the database at all.
 
 This is an overlay build, not a diverged fork: `UPSTREAM_REF` pins the upstream release, `patches/` holds two small patches, `overlay/` holds the new cache code. CI reassembles from pristine upstream on every run, so tracking upstream releases stays a one line change. `DIVERGENCE.md` is the complete list of what's different.
@@ -14,7 +18,18 @@ Security relevant tables are never cached (default exclude list): `Users`, `Perm
 
 ## Install
 
-Build the plugin (or grab a release zip) and drop it into Jellyfin's plugin folder:
+Grab the [latest release](https://github.com/PjSalty/jellyfin-pgsql/releases/latest) and unpack it into Jellyfin's plugin folder:
+
+```bash
+curl -LO https://github.com/PjSalty/jellyfin-pgsql/releases/download/10.11.11-1-salty.1/jellyfin-pgsql-10.11.11-1-salty.1.zip
+curl -LO https://github.com/PjSalty/jellyfin-pgsql/releases/download/10.11.11-1-salty.1/SHA256SUMS
+sha256sum -c SHA256SUMS
+unzip jellyfin-pgsql-10.11.11-1-salty.1.zip -d /path/to/config/plugins/PostgreSQL
+```
+
+The release version tracks the upstream plugin release (and therefore the Jellyfin server version) it was built against. Match it to your server.
+
+Or build it yourself and drop the output into the plugin folder:
 
 ```bash
 ./build/assemble.sh
