@@ -1,0 +1,57 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: jellyfin
+      POSTGRES_USER: jellyfin
+      POSTGRES_PASSWORD: smoketest
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jellyfin"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  valkey:
+    image: valkey/valkey:8.1-alpine
+    command:
+      - valkey-server
+      - --maxmemory
+      - 256mb
+      - --maxmemory-policy
+      - volatile-lru
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  jellyfin:
+    image: jellyfin/jellyfin:10.11.11
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: jellyfin
+      POSTGRES_USER: jellyfin
+      POSTGRES_PASSWORD: smoketest
+      VALKEY_HOST: valkey
+      VALKEY_PORT: "6379"
+      CACHE_ENABLED: "true"
+      CACHE_DEBUG: "true"
+    volumes:
+      - ../upstream/publish:/config/plugins/PostgreSQL
+      - ./database.xml:/config/config/database.xml
+      - media:/media:ro
+    ports:
+      - "8096:8096"
+
+volumes:
+  media:

@@ -1,0 +1,54 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Assemble from upstream
+        run: ./build/assemble.sh
+
+      # NoWarn=CA1707: see ci.yml, drop when UPSTREAM_REF passes the upstream rename.
+      - name: Publish plugin
+        run: dotnet publish upstream/Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj -c Release -p:NoWarn=CA1707 -o upstream/publish
+
+      - name: Smoke test
+        run: ./tests/smoke.sh
+
+      - name: Package
+        run: |
+          cd upstream/publish
+          zip -r "../../jellyfin-pgsql-${GITHUB_REF_NAME}.zip" .
+          cd ../..
+          sha256sum "jellyfin-pgsql-${GITHUB_REF_NAME}.zip" > SHA256SUMS
+
+      - name: Changelog for this tag
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --latest --strip header
+        env:
+          OUTPUT: RELEASE_NOTES.md
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: RELEASE_NOTES.md
+          files: |
+            jellyfin-pgsql-*.zip
+            SHA256SUMS

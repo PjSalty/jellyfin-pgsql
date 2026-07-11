@@ -1,0 +1,7 @@
+upstream/
+bin/
+obj/
+*.user
+RELEASE_NOTES.md
+SHA256SUMS
+jellyfin-pgsql-*.zip

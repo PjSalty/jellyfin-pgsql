@@ -1,0 +1,40 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Pre-commit
+        uses: pre-commit/action@v3.0.1
+
+      - name: Assemble from upstream
+        run: ./build/assemble.sh
+
+      # NoWarn=CA1707: the pinned upstream tag ships two migration class names
+      # with underscores; upstream renamed them after the tag. Drop the
+      # suppression when UPSTREAM_REF moves past the rename.
+      - name: Publish plugin
+        run: dotnet publish upstream/Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj -c Release -p:NoWarn=CA1707 -o upstream/publish
+
+      - name: Smoke test
+        run: ./tests/smoke.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jellyfin-pgsql-plugin
+          path: upstream/publish
+          retention-days: 14

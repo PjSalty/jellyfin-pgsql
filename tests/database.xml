@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<DatabaseConfigurationOptions xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <DatabaseType>PLUGIN_PROVIDER</DatabaseType>
+  <CustomProviderOptions>
+    <PluginAssembly>Jellyfin.Plugin.Pgsql.dll</PluginAssembly>
+    <PluginName>PostgreSQL</PluginName>
+    <ConnectionString></ConnectionString>
+  </CustomProviderOptions>
+  <LockingBehavior>NoLock</LockingBehavior>
+</DatabaseConfigurationOptions>
