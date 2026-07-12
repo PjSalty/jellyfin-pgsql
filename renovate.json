@@ -1,0 +1,30 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": [
+    "Self-contained on purpose: this tree is public, so no private preset references.",
+    "An UPSTREAM_REF bump is a release event for the overlay: CI reassembles from the new tag and the pipeline verdict says exactly what broke. Review, never automerge.",
+    "NuGet pins live inside patches/ where no manager reaches them; the cache library pin has a compatibility ceiling documented in DIVERGENCE.md that a bot cannot know."
+  ],
+  "timezone": "America/New_York",
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Pinned upstream Jellyfin.Pgsql release the overlay reassembles from",
+      "managerFilePatterns": ["/^UPSTREAM_REF$/"],
+      "matchStrings": ["(?<currentValue>\\d+\\.\\d+\\.\\d+-\\d+)"],
+      "depNameTemplate": "JPVenson/Jellyfin.Pgsql",
+      "datasourceTemplate": "github-releases",
+      "versioningTemplate": "loose"
+    }
+  ],
+  "packageRules": [
+    {
+      "matchDepNames": ["JPVenson/Jellyfin.Pgsql"],
+      "automerge": false
+    },
+    {
+      "matchDatasources": ["docker"],
+      "automerge": false
+    }
+  ]
+}
