@@ -1,0 +1,43 @@
+# Cache classification for every table in the EF model. The schema-drift CI
+# job extracts table names from the assembled ModelSnapshot and fails if any
+# table is missing here (or listed here but gone from the model): an upstream
+# schema change must be classified by a human before it ships, because the
+# interceptor caches everything not explicitly excluded.
+#
+# policy values:
+#   cached    read-heavy browse/playback data; invalidated on write, 30m TTL
+#   excluded  security-relevant or insert-heavy; every read hits postgres
+#
+# An "excluded" row here MUST also appear in DefaultExcludedTables in
+# overlay/Jellyfin.Plugin.Pgsql/Cache/ValkeyCacheConfig.cs; the CI job checks
+# the two stay in lockstep.
+AccessSchedules excluded
+ActivityLogs excluded
+AncestorIds cached
+ApiKeys excluded
+AttachmentStreamInfos cached
+BaseItemImageInfos cached
+BaseItemMetadataFields cached
+BaseItemProviders cached
+BaseItems cached
+BaseItemTrailerTypes cached
+Chapters cached
+CustomItemDisplayPreferences cached
+DeviceOptions excluded
+Devices excluded
+DisplayPreferences cached
+HomeSection cached
+ImageInfos cached
+ItemDisplayPreferences cached
+ItemValues cached
+ItemValuesMap cached
+KeyframeData cached
+MediaSegments cached
+MediaStreamInfos cached
+PeopleBaseItemMap cached
+Peoples cached
+Permissions excluded
+Preferences excluded
+TrickplayInfos cached
+UserData cached
+Users excluded
