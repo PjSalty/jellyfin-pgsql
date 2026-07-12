@@ -79,3 +79,7 @@ The smoke test boots the full stack (Jellyfin + PostgreSQL + Valkey) with docker
 ## Credits and license
 
 All the real work is JPVenson's: the provider, the migrations, and the plugin database API in Jellyfin itself. This repo only adds the cache layer. GPL-3.0, same as upstream.
+
+## Schema drift gate
+
+`policy/table-classification.txt` classifies every table in the EF model as cached or excluded. CI extracts the table list from the assembled model snapshot and fails when the two disagree, so an upstream schema change cannot ship until a human classifies the new table.
