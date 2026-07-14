@@ -18,3 +18,14 @@ Ceilings worth knowing:
 - Fail-open is eventual, not instant: the interceptor consumes the database reader to cache rows, so a request in flight when the cache dies can error ("The reader is closed") until the 5s availability re-probe trips the provider into down mode. Observed and bounded in the smoke test; the error window is seconds, not an outage.
 - `IJellyfinDatabaseProvider` has no stability contract. Every server bump can break the provider ABI; the build against the pinned `Jellyfin.Controller` package is the tripwire.
 - Cached tables and excluded tables are policy, not mechanism: see the table in the README. A new server table lands uncached-by-default only if it appears in the exclude list; otherwise it is cached and invalidated on write like everything else.
+
+## 0003 schema hardening via the scheduled optimiser
+
+Prod-proven indexes upstream's EF model lacks: unique (UserId, Kind) on
+Permissions and Preferences (regrowth guard for the 251k-row bloat that put
+the auth join at 3.2s per request) and IX_BaseItems_latest_path for the
+Latest/browse filter+sort family. Statements live in
+overlay/Jellyfin.Plugin.Pgsql/Schema/SchemaHardening.cs; the patch loops
+them in RunScheduledOptimisation with per-statement try/catch. Ceiling:
+none, this is durable schema. Drop when: upstream adds equivalent
+indexes/constraints to the EF model (offer the migration upstream).
