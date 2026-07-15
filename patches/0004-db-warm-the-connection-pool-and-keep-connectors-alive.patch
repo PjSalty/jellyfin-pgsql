@@ -1,0 +1,82 @@
+From 7c96a11431a5581b811d476c61f7f8eac86af6ec Mon Sep 17 00:00:00 2001
+From: Salty <99386653+PjSalty@users.noreply.github.com>
+Date: Tue, 14 Jul 2026 18:36:10 -0500
+Subject: [PATCH 4/4] db: warm the connection pool and keep connectors alive
+
+Without pool tuning Npgsql defaults MinPoolSize=0, so idle pools drain and
+every request reopens a physical connection. Each open runs getaddrinfo, and
+under Kubernetes the parallel A/AAAA lookups hit the conntrack DNAT race that
+returns EAGAIN. EF Core's default execution strategy does not retry the query
+path, so a failed open becomes an HTTP 500 (seen as intermittent 500s on
+/Items/*/Images -- missing poster art). The failure rate tracked connection-open
+frequency: idle replica pools took 93 of these errors to the always-busy
+leader's 3.
+
+Pin a warm floor of connectors so reopens are rare (the load-bearing fix),
+hold them alive with keepalive so conntrack/NAT reaping cannot silently drop
+them, and cap MaxPoolSize because Npgsql's default of 100 per pool would
+threaten Postgres max_connections across replicas. All env-tunable
+(POSTGRES_MIN_POOL_SIZE / MAX_POOL_SIZE / CONN_IDLE_LIFETIME / KEEPALIVE /
+TCP_KEEPALIVE) so re-sizing is a manifest edit, not a rebuild. Invalid values
+fall back to defaults rather than throwing.
+
+Pool parameters are orthogonal to the EF execution strategy, so this does not
+touch the transaction paths and cannot conflict with BeginTransaction().
+---
+ .../Database/PgSqlDatabaseProvider.cs         | 36 ++++++++++++++++++-
+ 1 file changed, 35 insertions(+), 1 deletion(-)
+
+diff --git a/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs b/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs
+index f9caee0..b79f081 100644
+--- a/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs
++++ b/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs
+@@ -293,6 +293,21 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
+         return converter(value.Value);
+     }
+ 
++    // Read an int/bool from the environment with a default, so the pool tuning
++    // below is a manifest edit rather than a rebuild. Invalid values fall back
++    // to the default rather than throwing: a typo must never take the DB down.
++    private static int EnvInt(string key, int fallback)
++    {
++        var raw = Environment.GetEnvironmentVariable(key);
++        return int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) ? value : fallback;
++    }
++
++    private static bool EnvBool(string key, bool fallback)
++    {
++        var raw = Environment.GetEnvironmentVariable(key);
++        return bool.TryParse(raw, out var value) ? value : fallback;
++    }
++
+     private NpgsqlConnectionStringBuilder GetConnectionBuilder(ICollection<CustomDatabaseOption>? options)
+     {
+         var includeErrorDetail = GetCustomDatabaseOption(options, "IncludeErrorDetail", e => e.Equals(bool.TrueString, StringComparison.OrdinalIgnoreCase), () => false);
+@@ -304,7 +319,26 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
+             Port = int.Parse(Environment.GetEnvironmentVariable("POSTGRES_PORT") ?? "5432", CultureInfo.InvariantCulture),
+             Database = Environment.GetEnvironmentVariable("POSTGRES_DB") ?? "jellyfin",
+             Username = Environment.GetEnvironmentVariable("POSTGRES_USER") ?? "jellyfin",
+-            Password = Environment.GetEnvironmentVariable("POSTGRES_PASSWORD") ?? throw new InvalidOperationException("PostgreSQL password must be provided via POSTGRES_PASSWORD environment variable")
++            Password = Environment.GetEnvironmentVariable("POSTGRES_PASSWORD") ?? throw new InvalidOperationException("PostgreSQL password must be provided via POSTGRES_PASSWORD environment variable"),
++
++            // Connection pool warming. Without this, Npgsql defaults MinPoolSize=0,
++            // so idle pools drain and every request reopens a physical connection.
++            // Each open runs getaddrinfo, and under Kubernetes the parallel A/AAAA
++            // lookups hit the conntrack DNAT race that returns EAGAIN; EF's default
++            // execution strategy does not retry the query path, so the open failure
++            // becomes an HTTP 500 (observed as intermittent 500s on /Items/*/Images).
++            // Pinning a warm floor of connectors makes reopens rare, which is where
++            // most of the fix comes from (idle replicas took 93 of these errors to
++            // the always-busy leader's 3). Keepalive holds the pinned connectors
++            // alive so conntrack/NAT reaping cannot silently drop them. MaxPoolSize
++            // is a hard cap: Npgsql defaults to 100/pool, which across pods would
++            // threaten Postgres max_connections. All env-tunable so re-sizing is a
++            // manifest edit, not a rebuild.
++            MinPoolSize = EnvInt("POSTGRES_MIN_POOL_SIZE", 3),
++            MaxPoolSize = EnvInt("POSTGRES_MAX_POOL_SIZE", 15),
++            ConnectionIdleLifetime = EnvInt("POSTGRES_CONN_IDLE_LIFETIME", 300),
++            KeepAlive = EnvInt("POSTGRES_KEEPALIVE", 30),
++            TcpKeepAlive = EnvBool("POSTGRES_TCP_KEEPALIVE", true)
+         };
+ 
+         if (includeErrorDetail)
