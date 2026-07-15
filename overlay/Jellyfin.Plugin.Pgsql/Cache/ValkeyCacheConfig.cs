@@ -62,6 +62,21 @@ public sealed class ValkeyCacheConfig
     public int TtlMinutes { get; init; } = 30;
 
     /// <summary>
+    /// Gets how long catalogue queries (BaseItems and its satellites) stay cached.
+    /// These change only when a library scan runs, so hours is correct and is what
+    /// makes browsing instant on the second visit.
+    /// </summary>
+    public int CatalogueTtlMinutes { get; init; } = 360;
+
+    /// <summary>
+    /// Gets how long a query naming UserData stays cached. Watched-state is rewritten
+    /// every few seconds during playback, so this is deliberately a micro-TTL: long
+    /// enough to absorb a page's worth of repeat lookups, short enough that progress
+    /// is never visibly stale.
+    /// </summary>
+    public int WatchedStateTtlSeconds { get; init; } = 20;
+
+    /// <summary>
     /// Gets the tables excluded from caching. Key: CACHE_EXCLUDED_TABLES (comma separated).
     /// Default: security relevant and insert heavy tables, see <see cref="DefaultExcludedTables"/>.
     /// </summary>
@@ -102,6 +117,8 @@ public sealed class ValkeyCacheConfig
             Password = Read(options, "VALKEY_PASSWORD"),
             Db = Clamp(ReadInt(options, "VALKEY_DB", 0), 0, 15, 0),
             TtlMinutes = Clamp(ReadInt(options, "CACHE_TTL_MINUTES", 30), 1, int.MaxValue, 30),
+            CatalogueTtlMinutes = Clamp(ReadInt(options, "CACHE_CATALOGUE_TTL_MINUTES", 360), 1, int.MaxValue, 360),
+            WatchedStateTtlSeconds = Clamp(ReadInt(options, "CACHE_WATCHED_TTL_SECONDS", 20), 1, 3600, 20),
             ExcludedTables = ReadList(options, "CACHE_EXCLUDED_TABLES", DefaultExcludedTables),
             KeyPrefix = Read(options, "CACHE_KEY_PREFIX") ?? "JF_",
             Compression = ReadBool(options, "CACHE_COMPRESSION", defaultValue: true),
