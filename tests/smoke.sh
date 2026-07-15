@@ -92,6 +92,29 @@ hits_after="$(keyspace_hits)"
 [ "${hits_after}" -gt "${hits_before}" ] || die "no cache hits after repeated browse (before=${hits_before} after=${hits_after})"
 [ "$(valkey DBSIZE)" -gt 0 ] || die "valkey holds no cache entries"
 
+info "asserting the pool params reached the connection string (patch 0004)"
+# The provider logs the resolved connection string at startup (password nulled),
+# so the pool params are directly observable and deterministically checkable --
+# no load, no timing, no assumptions about Npgsql's lazy pool warmup. Assert the
+# canonical Npgsql keywords with the values patch 0004 sets. An unpatched build
+# logs none of them (the defaults are implicit, not serialized).
+# Full behaviour (warm floor surviving idle pruning on a DNS-flaky network) is
+# verified in prod by the before/after 500-rate comparison, not here.
+conn_log="$(${COMPOSE} logs jellyfin 2>&1 | grep -F 'PostgreSQL connection string' | tail -1)"
+[ -n "${conn_log}" ] || die "provider never logged its connection string"
+case "${conn_log}" in
+    *"Maximum Pool Size=15"*) : ;;
+    *) die "MaxPoolSize not in connection string (pool params not applied): ${conn_log#*PostgreSQL connection string: }" ;;
+esac
+case "${conn_log}" in
+    *"Minimum Pool Size=3"*) : ;;
+    *) die "MinPoolSize not in connection string: ${conn_log#*PostgreSQL connection string: }" ;;
+esac
+case "${conn_log}" in
+    *"Keepalive=30"*) : ;;
+    *) die "Keepalive not in connection string: ${conn_log#*PostgreSQL connection string: }" ;;
+esac
+
 info "asserting writes invalidate and reads stay fresh"
 display_prefs_url="${BASE_URL}/DisplayPreferences/usersettings?userId=${user_id}&client=emby"
 curl -sf "${display_prefs_url}" -H "X-Emby-Token: ${token}" > /dev/null

@@ -9,6 +9,7 @@ Everything this repo changes relative to [JPVenson/Jellyfin.Pgsql](https://githu
 | `overlay/Jellyfin.Plugin.Pgsql/Cache/ValkeyCacheConfig.cs` | config record: database.xml CustomProviderOptions first, env vars second, defaults last | with patch 0002 |
 | `overlay/Jellyfin.Plugin.Pgsql/Cache/SecondLevelCacheFactory.cs` | composes the cache library in a plugin private ServiceCollection; process lifetime singleton; admin connection for flush | with patch 0002 |
 | `overlay/Jellyfin.Plugin.Pgsql/Cache/ForwardingLoggerProvider.cs` | forwards cache library logs to the host logger | with patch 0002 |
+| `patches/0004-db-warm-the-connection-pool-and-keep-connectors-alive.patch` | warms the Npgsql pool (MinPoolSize floor + keepalive + MaxPoolSize cap) so connections rarely reopen; env-tunable | upstream sets sane pool defaults, or the plugin grows first-class pool config |
 
 Ceilings worth knowing:
 
@@ -29,3 +30,24 @@ overlay/Jellyfin.Plugin.Pgsql/Schema/SchemaHardening.cs; the patch loops
 them in RunScheduledOptimisation with per-statement try/catch. Ceiling:
 none, this is durable schema. Drop when: upstream adds equivalent
 indexes/constraints to the EF model (offer the migration upstream).
+
+## 0004 connection pool warming
+
+Npgsql defaults `MinPoolSize=0`, so idle pools drain and every request reopens a
+physical connection. Each open runs `getaddrinfo`, and under Kubernetes the
+parallel A/AAAA lookups hit the conntrack DNAT race that returns EAGAIN; EF's
+default execution strategy does not retry the query path, so a failed open
+became an HTTP 500 (intermittent 500s on `/Items/*/Images`, missing poster art).
+The rate tracked connection-open frequency: idle replica pools took 93 of these
+to the always-busy leader's 3. The patch sets, in `GetConnectionBuilder`, a warm
+`MinPoolSize` floor (reopens become rare, the load-bearing fix), `KeepAlive` +
+`TcpKeepAlive` (conntrack/NAT reaping cannot silently drop pinned connectors),
+and a `MaxPoolSize` cap (Npgsql's default 100/pool would threaten Postgres
+`max_connections` across replicas). All values read from env
+(`POSTGRES_MIN_POOL_SIZE` / `MAX_POOL_SIZE` / `CONN_IDLE_LIFETIME` / `KEEPALIVE`
+/ `TCP_KEEPALIVE`) with safe fallbacks, so re-sizing is a manifest edit. Pool
+params are orthogonal to the execution strategy, so this never touches the
+transaction paths. Ceiling: the pod-scoped DNS mitigations (dnsConfig
+single-request-reopen + FQDN host, in the kubernetes deployment) reduce
+per-open cost but this reduces open *frequency*, which is the dominant term.
+Drop when: upstream ships sane pool defaults or first-class pool config.
