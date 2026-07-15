@@ -70,10 +70,29 @@ public static class SecondLevelCacheFactory
             services.AddLogging(builder => builder.AddProvider(new ForwardingLoggerProvider(logger)));
             services.AddEFSecondLevelCache(options => options
                 .UseStackExchangeRedisCacheProvider(redisOptions, TimeSpan.FromMinutes(config.TtlMinutes), config.Compression)
+                // Two tiers, because the two kinds of data age completely
+                // differently. Catalogue tables (BaseItems and its satellites)
+                // only change when a library scan runs, so they are cached for
+                // hours and survive playback. Anything naming UserData is
+                // watched-state: it is rewritten every few seconds during
+                // playback, so it gets a short micro-TTL instead of poisoning
+                // the long tier. Caching everything on one TTL is what made the
+                // measured hit ratio 17.6%: a single stream's progress writes
+                // evicted the entire browse cache six times a minute.
                 .CacheAllQueriesExceptContainingTableNames(
                     CacheExpirationMode.Absolute,
-                    TimeSpan.FromMinutes(config.TtlMinutes),
+                    TimeSpan.FromMinutes(config.CatalogueTtlMinutes),
                     config.ExcludedTables.ToArray())
+                // CommandTableNames is already an OrdinalIgnoreCase set. CRUD
+                // commands are left alone on purpose: overriding a write's policy
+                // is how people accidentally disable invalidation.
+                .OverrideCachePolicy(context =>
+                    !context.IsCrudCommand
+                    && context.CommandTableNames.Contains("UserData")
+                        ? new EFCachePolicy()
+                            .ExpirationMode(CacheExpirationMode.Absolute)
+                            .Timeout(TimeSpan.FromSeconds(config.WatchedStateTtlSeconds))
+                        : null)
                 .UseCacheKeyPrefix(config.KeyPrefix)
 
                 // 5s re-probe: a request whose reader the interceptor already
