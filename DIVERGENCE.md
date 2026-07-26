@@ -9,6 +9,7 @@ Everything this repo changes relative to [JPVenson/Jellyfin.Pgsql](https://githu
 | `overlay/Jellyfin.Plugin.Pgsql/Cache/ValkeyCacheConfig.cs` | config record: database.xml CustomProviderOptions first, env vars second, defaults last | with patch 0002 |
 | `overlay/Jellyfin.Plugin.Pgsql/Cache/SecondLevelCacheFactory.cs` | composes the cache library in a plugin private ServiceCollection; process lifetime singleton; admin connection for flush | with patch 0002 |
 | `overlay/Jellyfin.Plugin.Pgsql/Cache/ForwardingLoggerProvider.cs` | forwards cache library logs to the host logger | with patch 0002 |
+| `patches/0005-db-auto-prepare-the-hot-statements.patch` | enables Npgsql `MaxAutoPrepare` so postgres caches plans for the handful of EF statements this workload repeats millions of times; env-tunable | upstream enables auto-prepare, or EF/Npgsql change the default |
 | `patches/0004-db-warm-the-connection-pool-and-keep-connectors-alive.patch` | warms the Npgsql pool (MinPoolSize floor + keepalive + MaxPoolSize cap) so connections rarely reopen; env-tunable | upstream sets sane pool defaults, or the plugin grows first-class pool config |
 
 Ceilings worth knowing:
@@ -51,3 +52,17 @@ transaction paths. Ceiling: the pod-scoped DNS mitigations (dnsConfig
 single-request-reopen + FQDN host, in the kubernetes deployment) reduce
 per-open cost but this reduces open *frequency*, which is the dominant term.
 Drop when: upstream ships sane pool defaults or first-class pool config.
+
+## 0005 statement plan reuse (auto-prepare)
+
+Npgsql defaults `MaxAutoPrepare=0`, so every command is parsed and planned from
+scratch server-side, and this workload repeats the same handful of EF statements
+millions of times (measured live: one session query 747k calls, one `count(*)`
+2.6M calls, `pg_prepared_statements` = 0). On the hot user query postgres spent
+7.99ms planning against 4.31ms executing. The patch sets `MaxAutoPrepare` (25)
+and `AutoPrepareMinUsages` (3) in `GetConnectionBuilder`, both env-tunable
+(`POSTGRES_MAX_AUTO_PREPARE`, `POSTGRES_AUTO_PREPARE_MIN_USAGES`). Ceiling:
+prepared statements are per-connection server state, bounded at N x MaxPoolSize
+(25 x 15 = 375). Postgres still uses custom plans for the first five executions
+and adopts a generic plan only when it is not worse, so a skewed query cannot be
+pinned to a bad plan. Drop when: upstream enables auto-prepare by default.
