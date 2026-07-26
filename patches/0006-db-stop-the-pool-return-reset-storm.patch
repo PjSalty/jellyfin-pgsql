@@ -1,0 +1,60 @@
+From 3159d4ef93217723b0002ca764cd109b4983b4a8 Mon Sep 17 00:00:00 2001
+From: Salty <99386653+PjSalty@users.noreply.github.com>
+Date: Sat, 25 Jul 2026 23:20:10 -0500
+Subject: [PATCH 6/6] db: stop the 7-statement pool-return reset auto-prepare
+ introduced
+
+Enabling MaxAutoPrepare made Npgsql abandon its single DISCARD ALL on connection
+return (which would discard the prepared statements) in favour of a SEVEN
+statement reset sequence. Measured on one 100-item TV grid page: 1,081 SQL
+statements before auto-prepare, 9,289 after. Replaying those reset sequences
+alone cost 625ms over a unix socket, and this deployment crosses pod-to-pod TCP
+at 2.2-2.9ms per connect.
+
+NoResetOnClose=true removes them (8,120 statements per page) and keeps the
+prepared statements alive across pool churn, which is the point of auto-prepare
+in the first place. Safe here: a reset only matters when the app leaves session
+state behind (SET outside a transaction, temp tables, LISTEN, advisory locks);
+Jellyfin/EF issues plain parameterised DML on these connections.
+
+Also raises MaxAutoPrepare 25 -> 100 and lowers AutoPrepareMinUsages 3 -> 2:
+pg_stat_statements holds 540 distinct statements, so 25 slots evicts the working
+set. Prepared-statement value is measured: 764 executions of the item-retrieve
+query cost 4,303ms unprepared vs 1,332ms prepared (3.2x), and 10,917ms vs
+4,911ms of postgres container CPU.
+---
+ .../Database/PgSqlDatabaseProvider.cs         | 21 +++++++++++++++++--
+ 1 file changed, 19 insertions(+), 2 deletions(-)
+
+diff --git a/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs b/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs
+index 3e36cb7..fa66b4d 100644
+--- a/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs
++++ b/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs
+@@ -355,8 +355,25 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
+             // worse, so a skewed query cannot get silently pinned to a bad
+             // generic plan. Bounded cost: N statements per pooled connection
+             // (default 25 x MaxPoolSize 15 = 375 worst case).
+-            MaxAutoPrepare = EnvInt("POSTGRES_MAX_AUTO_PREPARE", 25),
+-            AutoPrepareMinUsages = EnvInt("POSTGRES_AUTO_PREPARE_MIN_USAGES", 3)
++            MaxAutoPrepare = EnvInt("POSTGRES_MAX_AUTO_PREPARE", 100),
++            AutoPrepareMinUsages = EnvInt("POSTGRES_AUTO_PREPARE_MIN_USAGES", 2),
++
++            // Do not reset connection state on pool return. This is a direct
++            // consequence of enabling auto-prepare above: with MaxAutoPrepare
++            // set, Npgsql stops using a single `DISCARD ALL` on return (which
++            // would blow away the prepared statements) and instead issues a
++            // SEVEN-statement reset sequence. Measured on one 100-item TV grid
++            // page: 1,081 statements before auto-prepare, 9,289 after. Replaying
++            // just those reset sequences cost 625ms over a unix socket, and this
++            // deployment crosses pod-to-pod TCP at 2.2-2.9ms per connect.
++            //
++            // Safe here because the reset only matters if the application leaves
++            // session state behind: SET/SET LOCAL outside a transaction, temp
++            // tables, LISTEN, or advisory locks. Jellyfin/EF does none of those
++            // on these connections; it issues plain parameterised DML. Setting
++            // this keeps the prepared statements alive across pool churn, which
++            // is the entire point of the previous patch.
++            NoResetOnClose = EnvBool("POSTGRES_NO_RESET_ON_CLOSE", true)
+         };
+ 
+         if (includeErrorDetail)

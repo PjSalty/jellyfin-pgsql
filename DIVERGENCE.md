@@ -66,3 +66,21 @@ prepared statements are per-connection server state, bounded at N x MaxPoolSize
 (25 x 15 = 375). Postgres still uses custom plans for the first five executions
 and adopts a generic plan only when it is not worse, so a skewed query cannot be
 pinned to a bad plan. Drop when: upstream enables auto-prepare by default.
+
+## 0006 pool-return reset storm (consequence of 0005)
+
+Enabling `MaxAutoPrepare` in 0005 made Npgsql abandon its single `DISCARD ALL`
+on connection return in favour of a SEVEN-statement reset sequence (it must not
+blanket-discard, or it would throw away the prepared statements). Measured on
+one 100-item TV grid page: 1,081 SQL statements before auto-prepare, 9,289
+after. Replaying the reset sequences alone cost 625ms over a unix socket, and
+this deployment crosses pod-to-pod TCP at 2.2-2.9ms per connect.
+`NoResetOnClose=true` removes 8,120 statements per page and keeps prepared
+statements alive across pool churn. Ceiling: a connection reset only matters if
+the application leaves session state behind (SET outside a transaction, temp
+tables, LISTEN, advisory locks) -- Jellyfin/EF issues plain parameterised DML,
+so there is nothing to leak. If a future patch introduces per-session state,
+this must be revisited. 0006 also raises MaxAutoPrepare to 100 and lowers
+AutoPrepareMinUsages to 2, because pg_stat_statements holds 540 distinct
+statements and 25 slots evicts the working set. Drop when: upstream sets sane
+Npgsql pooling defaults.
