@@ -1,0 +1,53 @@
+From 70ac0524d7e4b8ea68a60c486462569aa01c45ac Mon Sep 17 00:00:00 2001
+From: Salty <99386653+PjSalty@users.noreply.github.com>
+Date: Sat, 25 Jul 2026 22:41:17 -0500
+Subject: [PATCH 5/5] db: auto-prepare the hot statements so postgres stops
+ re-planning
+
+Npgsql defaults MaxAutoPrepare=0, so every command is parsed and planned from
+scratch server-side. This workload issues the same handful of EF statements
+millions of times: measured on a live server, one session query at 747k calls,
+one count(*) at 2.6M calls, with pg_prepared_statements sitting at 0. On the hot
+user query postgres spent 7.99ms planning against 4.31ms executing -- most of
+the cost was re-deriving a plan it already had.
+
+Auto-preparing the top N statements per connection lets postgres cache the plan.
+It still runs custom plans for the first five executions and only adopts a
+generic plan when it is not worse, so a skewed query cannot be silently pinned
+to a bad plan. Cost is bounded: N per pooled connection (25 x MaxPoolSize 15 =
+375 worst case). Both values env-tunable, so re-sizing is a manifest edit.
+---
+ .../Database/PgSqlDatabaseProvider.cs         | 20 ++++++++++++++++++-
+ 1 file changed, 19 insertions(+), 1 deletion(-)
+
+diff --git a/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs b/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs
+index b79f081..3e36cb7 100644
+--- a/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs
++++ b/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs
+@@ -338,7 +338,25 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
+             MaxPoolSize = EnvInt("POSTGRES_MAX_POOL_SIZE", 15),
+             ConnectionIdleLifetime = EnvInt("POSTGRES_CONN_IDLE_LIFETIME", 300),
+             KeepAlive = EnvInt("POSTGRES_KEEPALIVE", 30),
+-            TcpKeepAlive = EnvBool("POSTGRES_TCP_KEEPALIVE", true)
++            TcpKeepAlive = EnvBool("POSTGRES_TCP_KEEPALIVE", true),
++
++            // Statement plan reuse. Npgsql defaults MaxAutoPrepare=0, so every
++            // command is parsed and planned from scratch server-side -- and this
++            // workload issues the SAME handful of EF statements millions of
++            // times (measured on a live server: one session query 747k calls,
++            // one count(*) 2.6M calls, with pg_prepared_statements sitting at
++            // 0). On the hot user query, planning cost 7.99ms against 4.31ms of
++            // execution, i.e. most of the time was re-deriving a plan we
++            // already knew.
++            //
++            // Auto-preparing the top N statements per connection lets postgres
++            // cache the plan. Postgres still runs custom plans for the first
++            // five executions and only switches to a generic plan if it is not
++            // worse, so a skewed query cannot get silently pinned to a bad
++            // generic plan. Bounded cost: N statements per pooled connection
++            // (default 25 x MaxPoolSize 15 = 375 worst case).
++            MaxAutoPrepare = EnvInt("POSTGRES_MAX_AUTO_PREPARE", 25),
++            AutoPrepareMinUsages = EnvInt("POSTGRES_AUTO_PREPARE_MIN_USAGES", 3)
+         };
+ 
+         if (includeErrorDetail)
