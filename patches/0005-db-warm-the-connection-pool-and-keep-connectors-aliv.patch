@@ -1,36 +1,33 @@
-From 7c96a11431a5581b811d476c61f7f8eac86af6ec Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Salty <99386653+PjSalty@users.noreply.github.com>
-Date: Tue, 14 Jul 2026 18:36:10 -0500
-Subject: [PATCH 4/4] db: warm the connection pool and keep connectors alive
+Date: Sat, 26 Sep 2026 19:13:46 -0500
+Subject: [PATCH 05/11] db: warm the connection pool and keep connectors alive
 
-Without pool tuning Npgsql defaults MinPoolSize=0, so idle pools drain and
-every request reopens a physical connection. Each open runs getaddrinfo, and
-under Kubernetes the parallel A/AAAA lookups hit the conntrack DNAT race that
-returns EAGAIN. EF Core's default execution strategy does not retry the query
-path, so a failed open becomes an HTTP 500 (seen as intermittent 500s on
-/Items/*/Images -- missing poster art). The failure rate tracked connection-open
-frequency: idle replica pools took 93 of these errors to the always-busy
-leader's 3.
-
-Pin a warm floor of connectors so reopens are rare (the load-bearing fix),
-hold them alive with keepalive so conntrack/NAT reaping cannot silently drop
-them, and cap MaxPoolSize because Npgsql's default of 100 per pool would
-threaten Postgres max_connections across replicas. All env-tunable
+Intent: stop idle pools draining to zero. Npgsql defaults MinPoolSize=0, so
+every request reopened a physical connection; each open runs getaddrinfo,
+and under Kubernetes the parallel A/AAAA lookups hit the conntrack DNAT race
+that returns EAGAIN. EF Core's default execution strategy does not retry the
+query path, so a failed open became an HTTP 500 (intermittent 500s on
+/Items/*/Images, missing poster art); idle replica pools took 93 of these to
+the always-busy leader's 3. A warm MinPoolSize floor makes reopens rare,
+KeepAlive and TcpKeepAlive stop conntrack/NAT reaping from silently dropping
+the pinned connectors, and MaxPoolSize caps Npgsql's default of 100 per pool
+so replicas cannot exhaust max_connections. All env-tunable
 (POSTGRES_MIN_POOL_SIZE / MAX_POOL_SIZE / CONN_IDLE_LIFETIME / KEEPALIVE /
-TCP_KEEPALIVE) so re-sizing is a manifest edit, not a rebuild. Invalid values
-fall back to defaults rather than throwing.
-
-Pool parameters are orthogonal to the EF execution strategy, so this does not
-touch the transaction paths and cannot conflict with BeginTransaction().
+TCP_KEEPALIVE); invalid values fall back to the defaults instead of throwing.
+Drop when: upstream ships sane pool defaults or first-class pool config.
+Ceiling: pool parameters are orthogonal to the EF execution strategy, so the
+transaction paths are untouched; each process holds MinPoolSize connectors
+per distinct connection string for its whole life.
 ---
  .../Database/PgSqlDatabaseProvider.cs         | 36 ++++++++++++++++++-
  1 file changed, 35 insertions(+), 1 deletion(-)
 
 diff --git a/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs b/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs
-index f9caee0..b79f081 100644
+index 43f51d7..6c90e35 100644
 --- a/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs
 +++ b/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs
-@@ -293,6 +293,21 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
+@@ -307,6 +307,21 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
          return converter(value.Value);
      }
  
@@ -52,12 +49,12 @@ index f9caee0..b79f081 100644
      private NpgsqlConnectionStringBuilder GetConnectionBuilder(ICollection<CustomDatabaseOption>? options)
      {
          var includeErrorDetail = GetCustomDatabaseOption(options, "IncludeErrorDetail", e => e.Equals(bool.TrueString, StringComparison.OrdinalIgnoreCase), () => false);
-@@ -304,7 +319,26 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
-             Port = int.Parse(Environment.GetEnvironmentVariable("POSTGRES_PORT") ?? "5432", CultureInfo.InvariantCulture),
-             Database = Environment.GetEnvironmentVariable("POSTGRES_DB") ?? "jellyfin",
-             Username = Environment.GetEnvironmentVariable("POSTGRES_USER") ?? "jellyfin",
--            Password = Environment.GetEnvironmentVariable("POSTGRES_PASSWORD") ?? throw new InvalidOperationException("PostgreSQL password must be provided via POSTGRES_PASSWORD environment variable")
-+            Password = Environment.GetEnvironmentVariable("POSTGRES_PASSWORD") ?? throw new InvalidOperationException("PostgreSQL password must be provided via POSTGRES_PASSWORD environment variable"),
+@@ -322,7 +337,26 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
+ 
+             // Command timeout in seconds (0 = no limit). Defaults to Npgsql's 30s.
+             // Raise it via POSTGRES_COMMAND_TIMEOUT for slow queries on large libraries.
+-            CommandTimeout = int.Parse(Environment.GetEnvironmentVariable("POSTGRES_COMMAND_TIMEOUT") ?? "30", CultureInfo.InvariantCulture)
++            CommandTimeout = int.Parse(Environment.GetEnvironmentVariable("POSTGRES_COMMAND_TIMEOUT") ?? "30", CultureInfo.InvariantCulture),
 +
 +            // Connection pool warming. Without this, Npgsql defaults MinPoolSize=0,
 +            // so idle pools drain and every request reopens a physical connection.
@@ -80,3 +77,6 @@ index f9caee0..b79f081 100644
          };
  
          if (includeErrorDetail)
+-- 
+2.55.0
+

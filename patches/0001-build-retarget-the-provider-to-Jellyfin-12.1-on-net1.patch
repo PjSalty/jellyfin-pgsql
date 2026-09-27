@@ -1,0 +1,131 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Salty <99386653+PjSalty@users.noreply.github.com>
+Date: Sat, 26 Sep 2026 19:12:07 -0500
+Subject: [PATCH 01/11] build: retarget the provider to Jellyfin 12.1 on
+ net10.0
+
+Intent: build against the 12.1 server: net10.0, Jellyfin.Controller and
+Jellyfin.Model 12.1.0, EF Core and Microsoft.Extensions at the host's exact
+10.0.11 pins (PrivateAssets all, so none of them ship in the plugin folder),
+Npgsql and its EF provider 10.0.3, dotnet-ef 10.0.11, and the 12.1 ABI in
+build.yaml. IJellyfinDatabaseProvider is unchanged between 10.11.11 and 12.1,
+so no provider source changes are needed. The .NET 10 SDK adds CA1873
+(potentially expensive logging), which fails eight upstream log calls under
+AllEnabledByDefault plus TreatWarningsAsErrors; the ruleset lowers it to
+Info, the same way the 12.1 server lowers it to a suggestion.
+Drop when: upstream publishes a 12.x release carrying its own retarget.
+Ceiling: the EF Core and Microsoft.Extensions pins track the host's
+Directory.Packages.props exactly. The plugin does not ship them and binds to
+whatever the host loaded, so compiling against a newer line can reference
+APIs the host does not have.
+---
+ .config/dotnet-tools.json                     |  2 +-
+ .../Jellyfin.Plugin.Pgsql.csproj              | 38 +++++++++----------
+ build.yaml                                    |  4 +-
+ jellyfin.ruleset                              |  3 ++
+ 4 files changed, 25 insertions(+), 22 deletions(-)
+
+diff --git a/.config/dotnet-tools.json b/.config/dotnet-tools.json
+index ee846c9..6030b24 100644
+--- a/.config/dotnet-tools.json
++++ b/.config/dotnet-tools.json
+@@ -3,7 +3,7 @@
+   "isRoot": true,
+   "tools": {
+     "dotnet-ef": {
+-      "version": "9.0.11",
++      "version": "10.0.11",
+       "commands": [
+         "dotnet-ef"
+       ],
+diff --git a/Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj b/Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj
+index a19f066..9413815 100644
+--- a/Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj
++++ b/Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj
+@@ -1,7 +1,7 @@
+ <Project Sdk="Microsoft.NET.Sdk">
+ 
+   <PropertyGroup>
+-    <TargetFramework>net9.0</TargetFramework>
++    <TargetFramework>net10.0</TargetFramework>
+     <RootNamespace>Jellyfin.Plugin.Pgsql</RootNamespace>
+     <GenerateDocumentationFile>true</GenerateDocumentationFile>
+     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+@@ -11,27 +11,27 @@
+   </PropertyGroup>
+ 
+   <ItemGroup>
+-    <PackageReference Include="Jellyfin.Controller" Version="10.11.11" PrivateAssets="all" />
+-    <PackageReference Include="Jellyfin.Model" Version="10.11.11" PrivateAssets="all" />
+-    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="9.0.4" />
+-    <PackageReference Include="Npgsql" Version="9.0.4" />
+-    <PackageReference Include="Microsoft.EntityFrameworkCore.Abstractions" Version="9.0.11" PrivateAssets="all" />
+-    <PackageReference Include="Microsoft.Extensions.Caching.Abstractions" Version="9.0.11" PrivateAssets="all" />
+-    <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="9.0.11" PrivateAssets="all" />
+-    <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="9.0.11" PrivateAssets="all" />
+-    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="9.0.11" PrivateAssets="all" />
+-    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="9.0.11" PrivateAssets="all" />
+-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.11" PrivateAssets="all" />
+-    <PackageReference Include="Microsoft.Extensions.Logging" Version="9.0.11" PrivateAssets="all" />
+-    <PackageReference Include="Microsoft.Extensions.Options" Version="9.0.11" PrivateAssets="all" />
+-    <PackageReference Include="Microsoft.Extensions.Primitives" Version="9.0.11" PrivateAssets="all" />
+-    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="9.0.11" PrivateAssets="all" />
+-    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="9.0.11" PrivateAssets="all" />
+-    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="9.0.11">
++    <PackageReference Include="Jellyfin.Controller" Version="12.1.0" PrivateAssets="all" />
++    <PackageReference Include="Jellyfin.Model" Version="12.1.0" PrivateAssets="all" />
++    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
++    <PackageReference Include="Npgsql" Version="10.0.3" />
++    <PackageReference Include="Microsoft.EntityFrameworkCore.Abstractions" Version="10.0.11" PrivateAssets="all" />
++    <PackageReference Include="Microsoft.Extensions.Caching.Abstractions" Version="10.0.11" PrivateAssets="all" />
++    <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="10.0.11" PrivateAssets="all" />
++    <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.11" PrivateAssets="all" />
++    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.11" PrivateAssets="all" />
++    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.11" PrivateAssets="all" />
++    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.11" PrivateAssets="all" />
++    <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.11" PrivateAssets="all" />
++    <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.11" PrivateAssets="all" />
++    <PackageReference Include="Microsoft.Extensions.Primitives" Version="10.0.11" PrivateAssets="all" />
++    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.11" PrivateAssets="all" />
++    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.11" PrivateAssets="all" />
++    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.11">
+       <PrivateAssets>all</PrivateAssets>
+       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+     </PackageReference>
+-    <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="9.0.11">
++    <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="10.0.11">
+       <PrivateAssets>all</PrivateAssets>
+       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+     </PackageReference>
+diff --git a/build.yaml b/build.yaml
+index 8f4d32e..8c6ce91 100644
+--- a/build.yaml
++++ b/build.yaml
+@@ -2,8 +2,8 @@
+ name: "PostgreSQL Database"
+ guid: "27e7ad18-ea71-4b19-b1a9-6e4c2e4d5e18"
+ version: "1.0.0.0"
+-targetAbi: "10.11.0.0"
+-framework: "net9.0"
++targetAbi: "12.1.0.0"
++framework: "net10.0"
+ overview: "PostgreSQL database provider for Jellyfin"
+ description: >
+   Adds PostgreSQL database support to Jellyfin server. Configure using
+diff --git a/jellyfin.ruleset b/jellyfin.ruleset
+index 8af791c..aecb05e 100644
+--- a/jellyfin.ruleset
++++ b/jellyfin.ruleset
+@@ -75,6 +75,9 @@
+         <Rule Id="CA1724" Action="Info" />
+         <!-- disable warning CA1805: Do not initialize unnecessarily -->
+         <Rule Id="CA1805" Action="Info" />
++        <!-- disable warning CA1873: Avoid potentially expensive logging (new in the .NET 10 SDK;
++            the 12.1 server lowers it to a suggestion the same way) -->
++        <Rule Id="CA1873" Action="Info" />
+         <!-- disable warning CA1812: internal class that is apparently never instantiated.
+             If so, remove the code from the assembly.
+             If this class is intended to contain only static members, make it static -->
+-- 
+2.55.0
+

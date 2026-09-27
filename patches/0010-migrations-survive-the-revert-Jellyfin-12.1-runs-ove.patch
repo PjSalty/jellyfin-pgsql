@@ -1,0 +1,86 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Salty <99386653+PjSalty@users.noreply.github.com>
+Date: Sat, 26 Sep 2026 19:17:31 -0500
+Subject: [PATCH 10/11] migrations: survive the revert Jellyfin 12.1 runs over
+ applied migrations
+
+Intent: Jellyfin 12.1 applies each pending migration with
+IMigrator.MigrateAsync(id), which first reverts every applied migration whose
+id sorts after that one. The 12.1 migrations mirror upstream's ids, the first
+being 20260113102337, so the first step reverts 20260524120336
+(AddUniqueNormalizedUsernameIndex), 20260522092303 (AddNormalizedUsername)
+and 20260128200059 (10.11.6-1), and later steps re-apply them in id order.
+Two of those Down() methods were not safe to re-apply:
+- 20260522092303 dropped NormalizedUsername but kept the
+  20260522092304_UpdateNormalizedUsername history row, so the column came
+  back empty for every user, the backfill routine never re-ran and the
+  re-created unique index failed on duplicate empty names. Down now deletes
+  that row, with quoted identifiers, as upstream's own Down does.
+- 20260128200059 narrowed PeopleBaseItemMap's key back to (ItemId, PeopleId),
+  which fails as soon as one person holds two roles on one item. Down now
+  reverts only the ParentId foreign key; Up re-runs cleanly over the wider
+  key.
+Drop when: upstream ships equivalent Down() changes.
+Ceiling: these Down() methods are re-apply-safe, not faithful downgrades: a
+downgrade below 10.11.6 keeps the wider PeopleBaseItemMap key.
+---
+ .../Migrations/20260128200059_10.11.6-1.cs    | 23 +++++--------------
+ ...303_Jellyfin10.11.11_NormalizedUsername.cs |  6 +++++
+ 2 files changed, 12 insertions(+), 17 deletions(-)
+
+diff --git a/Jellyfin.Plugin.Pgsql/Migrations/20260128200059_10.11.6-1.cs b/Jellyfin.Plugin.Pgsql/Migrations/20260128200059_10.11.6-1.cs
+index b521bbd..3d1e75d 100644
+--- a/Jellyfin.Plugin.Pgsql/Migrations/20260128200059_10.11.6-1.cs
++++ b/Jellyfin.Plugin.Pgsql/Migrations/20260128200059_10.11.6-1.cs
+@@ -41,26 +41,15 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
+         /// <inheritdoc />
+         protected override void Down(MigrationBuilder migrationBuilder)
+         {
++            // Jellyfin 12.1 reverts this migration (its id sorts inside the 12.1
++            // migration range) and re-applies it a few steps later. Narrowing the
++            // key back to (ItemId, PeopleId) fails, or would have to delete rows,
++            // as soon as one person holds two roles on one item, which is what the
++            // wider key is for. Up re-runs cleanly over the wider key, so only the
++            // foreign key is reverted.
+             migrationBuilder.DropForeignKey(
+                 name: "FK_BaseItems_BaseItems_ParentId",
+                 table: "BaseItems");
+-
+-            migrationBuilder.DropPrimaryKey(
+-                name: "PK_PeopleBaseItemMap",
+-                table: "PeopleBaseItemMap");
+-
+-            migrationBuilder.AlterColumn<string>(
+-                name: "Role",
+-                table: "PeopleBaseItemMap",
+-                type: "text",
+-                nullable: true,
+-                oldClrType: typeof(string),
+-                oldType: "text");
+-
+-            migrationBuilder.AddPrimaryKey(
+-                name: "PK_PeopleBaseItemMap",
+-                table: "PeopleBaseItemMap",
+-                columns: ["ItemId", "PeopleId"]);
+         }
+     }
+ }
+diff --git a/Jellyfin.Plugin.Pgsql/Migrations/20260522092303_Jellyfin10.11.11_NormalizedUsername.cs b/Jellyfin.Plugin.Pgsql/Migrations/20260522092303_Jellyfin10.11.11_NormalizedUsername.cs
+index a94096e..d93047c 100644
+--- a/Jellyfin.Plugin.Pgsql/Migrations/20260522092303_Jellyfin10.11.11_NormalizedUsername.cs
++++ b/Jellyfin.Plugin.Pgsql/Migrations/20260522092303_Jellyfin10.11.11_NormalizedUsername.cs
+@@ -25,5 +25,11 @@ public partial class Jellyfin101111NormalizedUsername : Migration
+         migrationBuilder.DropColumn(
+             name: "NormalizedUsername",
+             table: "Users");
++
++        // Jellyfin 12.1 reverts this migration and re-applies it a few steps
++        // later. The column comes back empty, so the code routine that fills it
++        // must run again: forget that it ran, as upstream's own Down does. Quoted
++        // because the history table and column names are case sensitive here.
++        migrationBuilder.Sql("DELETE FROM \"__EFMigrationsHistory\" WHERE \"MigrationId\" = '20260522092304_UpdateNormalizedUsername';");
+     }
+ }
+-- 
+2.55.0
+

@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Salty <99386653+PjSalty@users.noreply.github.com>
+Date: Sat, 26 Sep 2026 19:13:12 -0500
+Subject: [PATCH 04/11] schema: ensure prod-proven indexes during scheduled
+ optimisation
+
+Intent: apply the indexes production proved but upstream's EF model does not
+carry, from the scheduled optimiser: the Latest/browse filter+sort family,
+the per-row UserData played-state probe, and the trigram search indexes.
+Statements live in Schema/SchemaHardening.cs (overlay); each is idempotent
+and a failing statement never stops the pass. 12.1 also runs the optimiser
+right after a migration batch, so the hardening lands in the same pass that
+migrated the schema.
+Drop when: upstream's EF model carries equivalent indexes.
+Ceiling: CREATE/DROP INDEX CONCURRENTLY outside a transaction, one statement
+at a time, under the provider's command timeout.
+---
+ .../Database/PgSqlDatabaseProvider.cs          | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+diff --git a/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs b/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs
+index 7f00f2d..43f51d7 100644
+--- a/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs
++++ b/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs
+@@ -98,6 +98,24 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
+             {
+                 await context.Database.ExecuteSqlRawAsync("VACUUM ANALYZE", cancellationToken).ConfigureAwait(false);
+                 _logger.LogInformation("PostgreSQL database optimized successfully");
++
++                foreach (var statement in Schema.SchemaHardening.Statements)
++                {
++                    try
++                    {
++                        await context.Database.ExecuteSqlRawAsync(statement, cancellationToken).ConfigureAwait(false);
++                    }
++                    catch (Exception ex)
++                    {
++                        // Hardening never fails the optimisation pass, which 12.1
++                        // also runs right after migrations: a statement that cannot
++                        // run here (a role without the rights for pg_trgm, a lock
++                        // timeout) is logged and skipped.
++                        _logger.LogWarning(ex, "Schema hardening statement skipped: {Statement}", statement);
++                    }
++                }
++
++                _logger.LogInformation("PostgreSQL schema hardening ensured");
+             }
+         }
+     }
+-- 
+2.55.0
+

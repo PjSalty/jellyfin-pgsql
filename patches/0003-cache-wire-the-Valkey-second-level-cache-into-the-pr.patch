@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Salty <99386653+PjSalty@users.noreply.github.com>
-Date: Sat, 11 Jul 2026 06:36:45 -0500
-Subject: [PATCH 2/2] cache: wire the Valkey second level cache into the
+Date: Sat, 26 Sep 2026 19:12:52 -0500
+Subject: [PATCH 03/11] cache: wire the Valkey second level cache into the
  provider
 
 Intent: register the cache interceptor on the DbContextOptionsBuilder inside
@@ -9,15 +9,16 @@ Initialise (covers every pooled context) and flush the cache after
 PurgeDatabase, whose table purge statements the interceptor cannot see.
 Fail open: any cache bootstrap failure logs a warning and the server runs
 uncached; tight 500ms cache timeouts cap the stall a slow-but-alive cache
-can cause (the library holds a process-wide lock around sync cache calls).
-Off by default, enabled via CACHE_ENABLED.
+can cause (the library still runs every cache read synchronously under one
+lock per interception result type, waiting up to its 7s lock timeout before
+it proceeds unlocked). Off by default, enabled via CACHE_ENABLED.
 Drop when: upstream accepts an equivalent hook.
 ---
  .../Database/PgSqlDatabaseProvider.cs         | 24 +++++++++++++++++++
  1 file changed, 24 insertions(+)
 
 diff --git a/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs b/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs
-index 972ad9c..9523faa 100644
+index a28df3e..7f00f2d 100644
 --- a/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs
 +++ b/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs
 @@ -9,6 +9,7 @@ using System.Threading;
@@ -54,7 +55,7 @@ index 972ad9c..9523faa 100644
      }
  
      /// <inheritdoc/>
-@@ -234,6 +254,10 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
+@@ -247,6 +267,10 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
  
          await dbContext.Database.ExecuteSqlRawAsync(truncateAllQuery).ConfigureAwait(false);
          _logger.LogInformation("PostgreSQL database tables purged successfully");
