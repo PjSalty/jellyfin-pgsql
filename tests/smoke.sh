@@ -123,20 +123,42 @@ curl -sf -X POST "${display_prefs_url}" -H "X-Emby-Token: ${token}" -H 'Content-
 fresh="$(curl -sf "${display_prefs_url}" -H "X-Emby-Token: ${token}" | jq -r '.CustomPrefs.smoke')"
 [ "${fresh}" = "1" ] || die "stale read after write: expected CustomPrefs.smoke=1, got ${fresh}"
 
-info "killing valkey and asserting fail open"
+# Fail-open must be INSTANT, not eventual.
+#
+# This used to loop 12 times at 5s intervals and pass if ANY attempt returned
+# 200, with a comment explaining that the first requests legitimately error
+# while the availability probe trips. That turned the bug into the specification:
+# it passed green for months while production took ~1040
+# "System.InvalidOperationException: The reader is closed" events a day, which is
+# what made ASS subtitles fail at random (the embedded-font fetch at
+# /Videos/{id}/{msid}/Attachments/{n} resolves through a cached-table query).
+#
+# ResilientCacheServiceProvider makes the cache write non-throwing, so the
+# library can no longer hand EF a reader it already closed. The FIRST request
+# must therefore succeed. No retries, no tolerance: this assertion is red on the
+# old build and green on the fixed one.
+info "stopping valkey and asserting fail open is INSTANT"
 ${COMPOSE} stop valkey > /dev/null
-# Fail-open is EVENTUAL, not instant: a request whose reader the interceptor
-# already consumed when the cache died errors until the availability probe
-# marks the provider down (5s re-probe interval). Assert recovery, allowing
-# the bounded blip.
-code=""
-for _ in $(seq 1 12); do
-    code="$(curl -s -o /dev/null -w '%{http_code}' "${BASE_URL}/Users/${user_id}/Items?Recursive=true" -H "X-Emby-Token: ${token}")"
-    if [ "${code}" = "200" ]; then
-        break
-    fi
-    sleep 5
-done
-[ "${code}" = "200" ] || die "server never failed open without valkey (last http ${code})"
+code="$(curl -s -o /dev/null -w '%{http_code}' \
+    "${BASE_URL}/Users/${user_id}/Items?Recursive=true" -H "X-Emby-Token: ${token}")"
+[ "${code}" = "200" ] || die "first request after valkey stop returned ${code}, expected 200 (closed-reader regression)"
+
+# A DEAD cache and a SLOW cache are different code paths, and only the dead one
+# was ever covered. `stop` gives an immediate connection-refused; production's
+# trigger is a cache that accepts TCP and then does not answer within
+# SyncTimeout, which is the case that throws from inside InsertValue AFTER the
+# reader has been drained and closed. `pause` reproduces exactly that: the
+# container keeps its socket open and never replies, so the availability probe
+# still believes the cache is healthy.
+info "pausing valkey and asserting fail open when the cache is SLOW rather than dead"
+${COMPOSE} start valkey > /dev/null
+wait_healthy || die "server did not recover after restarting valkey"
+curl -sf "${BASE_URL}/Users/${user_id}/Items?Recursive=true" -H "X-Emby-Token: ${token}" > /dev/null \
+    || die "warm-up request failed after valkey restart"
+${COMPOSE} pause valkey > /dev/null
+code="$(curl -s -o /dev/null -w '%{http_code}' \
+    "${BASE_URL}/Users/${user_id}/Items?Recursive=true" -H "X-Emby-Token: ${token}")"
+${COMPOSE} unpause valkey > /dev/null
+[ "${code}" = "200" ] || die "request against a paused (slow) valkey returned ${code}, expected 200 (closed-reader regression)"
 
 info "PASS"

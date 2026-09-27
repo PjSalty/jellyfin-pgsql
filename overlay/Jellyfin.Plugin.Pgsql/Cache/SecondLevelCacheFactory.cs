@@ -70,6 +70,13 @@ public static class SecondLevelCacheFactory
             services.AddLogging(builder => builder.AddProvider(new ForwardingLoggerProvider(logger)));
             services.AddEFSecondLevelCache(options => options
                 .UseStackExchangeRedisCacheProvider(redisOptions, TimeSpan.FromMinutes(config.TtlMinutes), config.Compression)
+                // Must come AFTER UseStackExchangeRedisCacheProvider: that call stores the
+                // Redis configuration in Settings.AdditionalData (which the inner provider
+                // reads) and sets Settings.CacheProvider to the Redis type; this line then
+                // repoints CacheProvider at the wrapper. See ResilientCacheServiceProvider
+                // for why the wrapper exists: a throwing cache write makes the library hand
+                // EF a reader it already closed.
+                .UseCustomCacheProvider<ResilientCacheServiceProvider>()
                 // Two tiers, because the two kinds of data age completely
                 // differently. Catalogue tables (BaseItems and its satellites)
                 // only change when a library scan runs, so they are cached for
@@ -95,11 +102,34 @@ public static class SecondLevelCacheFactory
                         : null)
                 .UseCacheKeyPrefix(config.KeyPrefix)
 
-                // 5s re-probe: a request whose reader the interceptor already
-                // consumed when the cache died errors until the availability
-                // check trips the provider into down mode, so this interval
-                // bounds the visible error window of a cache outage. A dead
-                // cache afterwards means clean uncached operation.
+                // DO NOT ADD .SkipCachingResults(...) HERE.
+                //
+                // It is the one remaining way to reopen the closed-reader bug that
+                // ResilientCacheServiceProvider fixes. DbCommandIgnoreCachingProcessor
+                // .ShouldSkipCachingResults invokes that predicate only when it is
+                // non-null, and the call sits INSIDE the interceptor's try block, AFTER
+                // EFDataReaderLoader has drained and closed the live NpgsqlDataReader.
+                // A predicate that throws therefore lands in the same catch that returns
+                // the closed reader, and EF fails with
+                // "System.InvalidOperationException: The reader is closed" exactly as
+                // before. Leaving it unset makes that branch return false with no
+                // reachable throw, which is the only reason the fix is complete rather
+                // than partial. Exclude tables via ExcludedTables instead.
+
+                // Required: without it the library RETHROWS a cache failure and every
+                // affected query 500s outright.
+                //
+                // This used to claim the 5s re-probe "bounds the visible error window of a
+                // cache outage". That was wrong, and being wrong confidently is why the
+                // resulting errors went unexplained for months. EFCacheServiceCheck probes
+                // with a single GetValue("__Test__"), which SUCCEEDS against a cache that is
+                // up but slow or intermittently failing, so _isCacheServerAvailable stays
+                // true and down-mode never engages. The window was unbounded, not 5s.
+                //
+                // It is bounded now for a different reason: ResilientCacheServiceProvider
+                // makes the write path non-throwing, so the catch that returns a closed
+                // reader is unreachable. This setting now only covers a genuinely dead
+                // cache, which is what its name suggests.
                 .UseDbCallsIfCachingProviderIsDown(TimeSpan.FromSeconds(5))
 
                 // The cacheable event forwards hit/miss/invalidation diagnostics to the
