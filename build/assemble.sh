@@ -14,7 +14,19 @@ UPSTREAM_REF="$(tr -d '[:space:]' < "${REPO_ROOT}/UPSTREAM_REF")"
 OUT="${1:-${REPO_ROOT}/upstream}"
 
 rm -rf "${OUT}"
-git clone --quiet --depth 1 --branch "${UPSTREAM_REF}" "${UPSTREAM_REPO}" "${OUT}"
+if [[ "${UPSTREAM_REF}" =~ ^[0-9a-f]{40}$ ]]; then
+    # A commit pin: clone --branch takes only tags and branches.
+    git init --quiet "${OUT}"
+    git -C "${OUT}" remote add origin "${UPSTREAM_REPO}"
+    git -C "${OUT}" fetch --quiet --depth 1 origin "${UPSTREAM_REF}"
+    git -C "${OUT}" checkout --quiet FETCH_HEAD
+    if [ "$(git -C "${OUT}" rev-parse HEAD)" != "${UPSTREAM_REF}" ]; then
+        echo "fetched $(git -C "${OUT}" rev-parse HEAD), expected ${UPSTREAM_REF}" >&2
+        exit 1
+    fi
+else
+    git clone --quiet --depth 1 --branch "${UPSTREAM_REF}" "${UPSTREAM_REPO}" "${OUT}"
+fi
 
 cd "${OUT}"
 git -c user.name="assemble" -c user.email="assemble@localhost" am "${REPO_ROOT}"/patches/*.patch

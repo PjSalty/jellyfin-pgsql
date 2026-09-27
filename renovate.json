@@ -2,19 +2,29 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "description": [
     "Self-contained on purpose: this tree is public, so no private preset references.",
-    "An UPSTREAM_REF bump is a release event for the overlay: CI reassembles from the new tag and the pipeline verdict says exactly what broke. Review, never automerge.",
+    "An UPSTREAM_REF bump is a release event for the overlay: CI reassembles from the new tag or commit and the pipeline verdict says exactly what broke. Review, never automerge.",
     "NuGet pins live inside patches/ where no manager reaches them; the cache library pin has a compatibility ceiling documented in DIVERGENCE.md that a bot cannot know."
   ],
   "timezone": "America/New_York",
   "customManagers": [
     {
       "customType": "regex",
-      "description": "Pinned upstream Jellyfin.Pgsql release the overlay reassembles from",
+      "description": "Pinned upstream Jellyfin.Pgsql release tag the overlay reassembles from",
       "managerFilePatterns": ["/^UPSTREAM_REF$/"],
       "matchStrings": ["(?<currentValue>\\d+\\.\\d+\\.\\d+-\\d+)"],
       "depNameTemplate": "JPVenson/Jellyfin.Pgsql",
       "datasourceTemplate": "github-releases",
       "versioningTemplate": "loose"
+    },
+    {
+      "customType": "regex",
+      "description": "Pinned upstream Jellyfin.Pgsql master commit, used while upstream has no release for the server line",
+      "managerFilePatterns": ["/^UPSTREAM_REF$/"],
+      "matchStrings": ["(?<currentDigest>[0-9a-f]{40})"],
+      "depNameTemplate": "JPVenson/Jellyfin.Pgsql",
+      "packageNameTemplate": "https://github.com/JPVenson/Jellyfin.Pgsql",
+      "currentValueTemplate": "master",
+      "datasourceTemplate": "git-refs"
     }
   ],
   "packageRules": [
