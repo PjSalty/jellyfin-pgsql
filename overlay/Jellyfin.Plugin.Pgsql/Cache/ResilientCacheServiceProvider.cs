@@ -14,7 +14,7 @@ namespace Jellyfin.Plugin.Pgsql.Cache;
 /// release through master, and the upstream fix (PR 325, "Fix closed DbDataReader
 /// issue") was closed unmerged on 2025-12-26, three days before 5.3.7 shipped. Issues
 /// 215 and 216 are the same bug, fixed and regressed repeatedly across 4.x and 5.x.
-/// Upgrading does not help.
+/// Upgrading does not help: the steps below are unchanged in 5.5.1.
 ///
 /// The defect, in DbCommandInterceptorProcessor.ProcessExecutedCommands:
 ///

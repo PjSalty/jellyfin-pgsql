@@ -1,0 +1,57 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Salty <99386653+PjSalty@users.noreply.github.com>
+Date: Sat, 26 Sep 2026 19:16:01 -0500
+Subject: [PATCH 08/11] db: fail the migration restore loudly and atomically
+
+Intent: make RestoreBackupFast either restore the pre-migration backup
+completely or fail visibly. psql continues after a failed statement and
+exits 0, so a --clean restore that broke half way logged success over a
+half-restored database; it now runs with ON_ERROR_STOP, in a single
+transaction that rolls back on the first error, and without ~/.psqlrc. A
+missing backup file throws instead of returning, so the migration service
+reports the rollback as failed rather than as attempted.
+Drop when: upstream restores atomically and fails on a missing backup.
+Ceiling: the dump must load cleanly into the server it came from. pg_dump
+17+ writes SET transaction_timeout, which PostgreSQL 16 and older reject, so
+a client newer than the server now makes the rollback fail instead of
+limping through; keep the client major equal to the server major. The single
+transaction holds its locks until the end, so the restore waits behind any
+other session still holding locks on the tables it drops.
+---
+ .../Database/PgSqlDatabaseProvider.cs                 | 11 ++++++++---
+ 1 file changed, 8 insertions(+), 3 deletions(-)
+
+diff --git a/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs b/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs
+index ca50c42..e15819a 100644
+--- a/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs
++++ b/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs
+@@ -212,18 +212,23 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
+         var connectionBuilder = GetConnectionBuilder(null);
+         var backupFile = Path.Combine(_applicationPaths.DataPath, BackupFolderName, $"{key}_{connectionBuilder.Database}.sql");
+ 
++        // Throw instead of returning: the migration service then reports the
++        // rollback as failed (manual intervention) rather than as attempted.
+         if (!File.Exists(backupFile))
+         {
+-            _logger.LogCritical("Tried to restore a backup that does not exist: {Key}", key);
+-            return;
++            throw new FileNotFoundException($"PostgreSQL backup {key} does not exist, nothing was restored", backupFile);
+         }
+ 
++        // psql keeps going after a failed statement and still exits 0, so a
++        // --clean restore that broke half way used to log success over a
++        // half-restored database. ON_ERROR_STOP makes the first error fatal and
++        // --single-transaction rolls the whole restore back with it.
+         var process = new Process
+         {
+             StartInfo = new ProcessStartInfo
+             {
+                 FileName = "psql",
+-                Arguments = $"--host={connectionBuilder.Host} --port={connectionBuilder.Port} --username={connectionBuilder.Username} --dbname={connectionBuilder.Database} --file=\"{backupFile}\" --no-password --quiet",
++                Arguments = $"--host={connectionBuilder.Host} --port={connectionBuilder.Port} --username={connectionBuilder.Username} --dbname={connectionBuilder.Database} --file=\"{backupFile}\" --no-password --quiet --no-psqlrc --set=ON_ERROR_STOP=1 --single-transaction",
+                 Environment = { ["PGPASSWORD"] = connectionBuilder.Password },
+                 UseShellExecute = false,
+                 RedirectStandardOutput = true,
+-- 
+2.55.0
+

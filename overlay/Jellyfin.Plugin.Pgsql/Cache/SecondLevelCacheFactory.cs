@@ -53,11 +53,14 @@ public static class SecondLevelCacheFactory
                 // availability check marks the provider down and queries run uncached.
                 // The timeouts are deliberately LAN-tight: writes and invalidations go
                 // through the CacheWriteQueue and never stall a request thread, but
-                // cache READS are still synchronous inside the library's process-wide
-                // lock, so a SLOW-but-up Valkey stalls the read path for up to the
-                // sync timeout per call. Dead Valkey = fine, slow Valkey = the timeout
-                // below caps the damage per read, and the queue's consumer eats the
-                // same timeout off the request path.
+                // cache READS are still synchronous, and the library runs every read
+                // under one lock per interception result type (a constant key, so in
+                // effect one lock for all query readers; a waiter proceeds unlocked
+                // after the library's 7s lock timeout). A SLOW-but-up Valkey therefore
+                // stalls the read path for up to the sync timeout per call. Dead
+                // Valkey = fine, slow Valkey = the timeout below caps the damage per
+                // read, and the queue's consumer eats the same timeout off the
+                // request path.
                 AbortOnConnectFail = false,
                 ConnectTimeout = 500,
                 SyncTimeout = 500,

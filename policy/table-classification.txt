@@ -32,6 +32,7 @@ ItemDisplayPreferences cached
 ItemValues cached
 ItemValuesMap cached
 KeyframeData cached
+LinkedChildren cached
 MediaSegments cached
 MediaStreamInfos cached
 PeopleBaseItemMap cached

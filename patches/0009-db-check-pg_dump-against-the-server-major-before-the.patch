@@ -1,0 +1,126 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Salty <99386653+PjSalty@users.noreply.github.com>
+Date: Sat, 26 Sep 2026 19:16:58 -0500
+Subject: [PATCH 09/11] db: check pg_dump against the server major before the
+ migration backup
+
+Intent: fail the migration backup with a message that says what to fix.
+pg_dump refuses to dump a server of a newer major version, and every
+migration pass starts with a pg_dump backup, so a client older than the
+server (postgresql-client-16 against PostgreSQL 18) stopped every migration
+with a bare stderr dump. MigrationBackupFast now reads the server major over
+an unpooled connection and the client major from pg_dump --version first:
+an older client, or no pg_dump at all, throws naming the
+postgresql-client-N package to install; a newer client logs a warning,
+because its dump can carry settings the older server rejects during the
+strict rollback restore.
+Drop when: upstream checks the client version itself.
+Ceiling: majors only; the probe costs one extra short-lived connection and
+one process start per migration backup.
+---
+ .../Database/PgSqlDatabaseProvider.cs         | 71 +++++++++++++++++++
+ 1 file changed, 71 insertions(+)
+
+diff --git a/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs b/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs
+index e15819a..cadeaf9 100644
+--- a/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs
++++ b/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs
+@@ -1,10 +1,12 @@
+ using System;
+ using System.Collections.Generic;
++using System.ComponentModel;
+ using System.Diagnostics;
+ using System.Globalization;
+ using System.IO;
+ using System.Linq;
+ using System.Reflection;
++using System.Text.RegularExpressions;
+ using System.Threading;
+ using System.Threading.Tasks;
+ using Jellyfin.Database.Implementations;
+@@ -167,6 +169,8 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
+         var connectionBuilder = GetConnectionBuilder(null);
+         var backupFile = Path.Combine(backupFolder, $"{key}_{connectionBuilder.Database}.sql");
+ 
++        await EnsurePgDumpCanDumpServerAsync(connectionBuilder, cancellationToken).ConfigureAwait(false);
++
+         var process = new Process
+         {
+             StartInfo = new ProcessStartInfo
+@@ -296,6 +300,73 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
+         SecondLevelCacheFactory.FlushCache(_logger);
+     }
+ 
++    // pg_dump refuses to dump a server of a newer major version, and that refusal
++    // used to surface as a bare stderr dump in the middle of the migration backup,
++    // before any migration ran. Compare the majors first and name the client to
++    // install.
++    private async Task EnsurePgDumpCanDumpServerAsync(NpgsqlConnectionStringBuilder connectionBuilder, CancellationToken cancellationToken)
++    {
++        // Unpooled: with the pool settings a one-off probe would otherwise keep a
++        // MinPoolSize floor of connectors open for the life of the process.
++        var probe = new NpgsqlConnectionStringBuilder(connectionBuilder.ConnectionString) { Pooling = false };
++        int serverMajor;
++        var connection = new NpgsqlConnection(probe.ConnectionString);
++        await using (connection.ConfigureAwait(false))
++        {
++            await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
++            serverMajor = connection.PostgreSqlVersion.Major;
++        }
++
++        using var process = new Process
++        {
++            StartInfo = new ProcessStartInfo
++            {
++                FileName = "pg_dump",
++                Arguments = "--version",
++                UseShellExecute = false,
++                RedirectStandardOutput = true,
++                RedirectStandardError = true,
++                CreateNoWindow = true
++            }
++        };
++
++        try
++        {
++            process.Start();
++        }
++        catch (Win32Exception ex)
++        {
++            throw new InvalidOperationException($"pg_dump is not installed: migrations back up the database with it first. Install postgresql-client-{serverMajor} next to the Jellyfin server.", ex);
++        }
++
++        var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
++        var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
++        await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
++        var version = await stdoutTask.ConfigureAwait(false);
++        await stderrTask.ConfigureAwait(false);
++
++        // "pg_dump (PostgreSQL) 18.6 (Debian 18.6-1.pgdg13+2)"
++        var match = Regex.Match(version, @"\(PostgreSQL\)\s+(\d+)", RegexOptions.CultureInvariant);
++        if (!match.Success)
++        {
++            throw new InvalidOperationException($"Could not read the pg_dump version from '{version.Trim()}'");
++        }
++
++        var clientMajor = int.Parse(match.Groups[1].Value, NumberStyles.None, CultureInfo.InvariantCulture);
++        if (clientMajor < serverMajor)
++        {
++            throw new InvalidOperationException($"pg_dump {clientMajor} cannot back up PostgreSQL {serverMajor}: it refuses servers of a newer major version, so no migration can run. Install postgresql-client-{serverMajor} next to the Jellyfin server.");
++        }
++
++        if (clientMajor > serverMajor)
++        {
++            _logger.LogWarning(
++                "pg_dump {ClientMajor} is newer than PostgreSQL {ServerMajor}: the backup works, but the rollback restore stops on settings the older server does not know (pg_dump 17+ writes transaction_timeout). Match the client major to the server major.",
++                clientMajor,
++                serverMajor);
++        }
++    }
++
+     private T? GetCustomDatabaseOption<T>(ICollection<CustomDatabaseOption>? options, string key, Func<string, T> converter, Func<T>? defaultValue = null)
+     {
+         if (options is null)
+-- 
+2.55.0
+

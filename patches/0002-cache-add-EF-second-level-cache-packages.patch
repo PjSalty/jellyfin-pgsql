@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Salty <99386653+PjSalty@users.noreply.github.com>
+Date: Sat, 26 Sep 2026 19:12:41 -0500
+Subject: [PATCH 02/11] cache: add EF second level cache packages
+
+Intent: bring EFCoreSecondLevelCacheInterceptor and its StackExchange.Redis
+provider into the publish output so the provider can cache query results in
+Valkey or Redis.
+Drop when: upstream ships a second level cache of its own.
+Ceiling: pinned at 5.5.1 because the plugin's AsyncKeyedLock must equal the
+server's (8.0.2 at 12.1): the host loads its own copy into the default load
+context first and a higher plugin reference fails to bind. 5.3.11 through
+5.5.1 reference exactly 8.0.2; 5.5.2 needs 8.1.2. Bump only together with the
+server's AsyncKeyedLock pin. The transitive MessagePack 3.1.8 is above every
+MessagePack advisory's fixed version (3.1.7), so no direct MessagePack pin.
+---
+ .../Jellyfin.Plugin.Pgsql.csproj                  | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj b/Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj
+index 9413815..d1e1ec3 100644
+--- a/Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj
++++ b/Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj
+@@ -37,6 +37,21 @@
+     </PackageReference>
+   </ItemGroup>
+ 
++  <ItemGroup>
++    <!-- Second level cache: must reach the publish output, so no PrivateAssets.
++         Pinned at 5.5.1 because the plugin's AsyncKeyedLock must EQUAL the
++         server's: the host loads its own AsyncKeyedLock (8.0.2 at 12.1) into
++         the default load context before the plugin, and a higher plugin
++         reference then fails to bind (FileLoadException at cache bootstrap,
++         observed live on the 10.11 host). 5.3.11 through 5.5.1 reference
++         exactly 8.0.2; 5.5.2 moves to 8.1.2. Bump only together with the
++         server's AsyncKeyedLock pin. The Redis provider brings
++         StackExchange.Redis 3.2.1 and MessagePack 3.1.8, above every
++         MessagePack advisory's fixed version, so no direct pin is needed. -->
++    <PackageReference Include="EFCoreSecondLevelCacheInterceptor" Version="5.5.1" />
++    <PackageReference Include="EFCoreSecondLevelCacheInterceptor.StackExchange.Redis" Version="5.5.1" />
++  </ItemGroup>
++
+   <ItemGroup>
+     <PackageReference Include="SerilogAnalyzer" Version="0.15.0" PrivateAssets="All" />
+     <PackageReference Include="StyleCop.Analyzers" Version="1.2.0-beta.556" PrivateAssets="All" />
+-- 
+2.55.0
+

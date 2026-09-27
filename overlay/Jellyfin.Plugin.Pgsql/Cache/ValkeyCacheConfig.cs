@@ -72,7 +72,8 @@ public sealed class ValkeyCacheConfig
     /// Gets how long a query naming UserData stays cached. Watched-state is rewritten
     /// every few seconds during playback, so this is deliberately a micro-TTL: long
     /// enough to absorb a page's worth of repeat lookups, short enough that progress
-    /// is never visibly stale.
+    /// is never visibly stale. The library adds 0 to 9 seconds of jitter to every
+    /// TTL, so the default 20 lands between 20 and 29.
     /// </summary>
     public int WatchedStateTtlSeconds { get; init; } = 20;
 
