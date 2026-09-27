@@ -6,7 +6,7 @@
 
 [JPVenson/Jellyfin.Pgsql](https://github.com/JPVenson/Jellyfin.Pgsql) plus an EF Core second level cache backed by Valkey (or Redis). PostgreSQL as Jellyfin's database, with repeated queries served from a shared cache instead of hitting the database at all.
 
-This is an overlay build, not a diverged fork: `UPSTREAM_REF` pins the upstream release, `patches/` holds two small patches, `overlay/` holds the new cache code. CI reassembles from pristine upstream on every run, so tracking upstream releases stays a one line change. `DIVERGENCE.md` is the complete list of what's different.
+This is an overlay build, not a diverged fork: `UPSTREAM_REF` pins the upstream release (or, while upstream has none for a server line, a commit), `patches/` holds a short series of small patches, `overlay/` holds the new code: the cache and, for Jellyfin 12.1, the PostgreSQL migrations upstream does not ship yet. CI reassembles from pristine upstream on every run, so tracking upstream stays a one line change. `DIVERGENCE.md` is the complete list of what's different.
 
 ## How the cache works
 
@@ -21,22 +21,24 @@ Security relevant tables are never cached (default exclude list): `Users`, `Perm
 Grab the [latest release](https://github.com/PjSalty/jellyfin-pgsql/releases/latest) and unpack it into Jellyfin's plugin folder:
 
 ```bash
-curl -LO https://github.com/PjSalty/jellyfin-pgsql/releases/download/10.11.11-1-salty.1/jellyfin-pgsql-10.11.11-1-salty.1.zip
-curl -LO https://github.com/PjSalty/jellyfin-pgsql/releases/download/10.11.11-1-salty.1/SHA256SUMS
+curl -LO https://github.com/PjSalty/jellyfin-pgsql/releases/download/12.1-0-salty.1/jellyfin-pgsql-12.1-0-salty.1.zip
+curl -LO https://github.com/PjSalty/jellyfin-pgsql/releases/download/12.1-0-salty.1/SHA256SUMS
 sha256sum -c SHA256SUMS
-unzip jellyfin-pgsql-10.11.11-1-salty.1.zip -d /path/to/config/plugins/PostgreSQL
+unzip jellyfin-pgsql-12.1-0-salty.1.zip -d /path/to/config/plugins/PostgreSQL
 ```
 
-The release version tracks the upstream plugin release (and therefore the Jellyfin server version) it was built against. Match it to your server.
+Release tags read `<server>-<upstream plugin release>-salty.<rev>`: `12.1-0-salty.1` is built for Jellyfin 12.1, from a pinned upstream commit because upstream has no 12.x release yet (the `0`), and is this repo's first revision for that pair. The 10.11 line used the same scheme, e.g. `10.11.11-1-salty.1`. Match the server part to your server.
+
+The server needs the PostgreSQL client tools (`pg_dump`, `psql`) at the same major as the database: every migration pass starts with a `pg_dump` backup, `pg_dump` refuses a newer server, and the rollback restore stops on settings an older server does not know. `docker/Dockerfile` installs `postgresql-client-18`.
 
 Or build it yourself and drop the output into the plugin folder:
 
 ```bash
 ./build/assemble.sh
-dotnet publish upstream/Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj -c Release -p:NoWarn=CA1707 -o /path/to/config/plugins/PostgreSQL
+dotnet publish upstream/Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj -c Release -o /path/to/config/plugins/PostgreSQL
 ```
 
-(`NoWarn=CA1707`: the pinned upstream tag has two migration class names its own analyzers reject; upstream fixed it after the tag. The suppression drops when `UPSTREAM_REF` moves forward.)
+Building needs the .NET 10 SDK.
 
 Point Jellyfin at the plugin with `config/database.xml` (see `tests/database.xml` for the exact shape), then configure via environment variables:
 
@@ -60,21 +62,24 @@ Run Valkey as a cache, not a datastore: `--maxmemory-policy volatile-lru`, persi
 
 ## Compatibility
 
-| This repo | Upstream plugin | Jellyfin server | EF Core |
-|---|---|---|---|
-| main | 10.11.11-1 | 10.11.11 | 9.0.11 |
+| This repo | Upstream plugin | Jellyfin server | EF Core | PostgreSQL client |
+|---|---|---|---|---|
+| main, `12.1-0-salty.N` | master `80101b9` (10.11.11-1 + #40 + #41), 12.1 port in this repo | 12.1 | 10.0.11 | 18 |
+| `10.11.11-1-salty.N` | 10.11.11-1 | 10.11.11 | 9.0.11 | 16 |
 
-The plugin version is tied to the server version by upstream. When Jellyfin releases, wait for the matching upstream plugin release, bump `UPSTREAM_REF`, and let CI tell you whether the patches still apply.
+The plugin version is tied to the server version by upstream. When Jellyfin releases, prefer the matching upstream plugin release; when there is none, pin an upstream commit and carry the server port here, as for 12.1. Bump `UPSTREAM_REF` and let CI tell you whether the patches still apply.
+
+Upgrading a 10.11.11 database to 12.1: the plugin's 12.1 migrations run in the server's normal migration pass, and `DIVERGENCE.md` describes what they do to existing data. Stock 12.1 also carries two code routines that do not run on PostgreSQL yet: `20260911120000_StripEmbeddedLinkedChildren` issues SQLite JSON SQL, and `20260910120000_MigrateRatingLevels` is reported to fail on Npgsql while a reader is still open. An existing database needs a server with both fixed; a fresh install is unaffected, because first-run setup marks those routines applied without running them.
 
 ## Test
 
 ```bash
 ./build/assemble.sh
-dotnet publish upstream/Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj -c Release -p:NoWarn=CA1707 -o upstream/publish
+dotnet publish upstream/Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj -c Release -o upstream/publish
 ./tests/smoke.sh
 ```
 
-The smoke test boots the full stack (Jellyfin + PostgreSQL + Valkey) with docker compose, completes the startup wizard, asserts cache hits on repeated browsing, asserts a write is immediately visible after invalidation, and asserts the server keeps serving when Valkey dies mid flight.
+The smoke test boots the full stack (Jellyfin 12.1 + PostgreSQL 18 + Valkey) with docker compose, asserts the first-boot migration backup ran, completes the startup wizard, asserts cache hits on repeated browsing, asserts a write is immediately visible after invalidation, and asserts the server keeps serving when Valkey dies or stalls mid flight. It runs against a fresh database, so it never exercises the 10.11 to 12.1 data migration; that needs a restored copy of a real database.
 
 ## Credits and license
 
