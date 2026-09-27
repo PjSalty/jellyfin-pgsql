@@ -60,6 +60,13 @@ info "asserting the cache bootstrapped"
 # match. Plain grep drains the stream to EOF.
 ${COMPOSE} logs jellyfin | grep "EF second level cache enabled" > /dev/null || die "cache enable log line missing"
 
+info "asserting the first-boot migration backup ran"
+# Every migration pass starts with a pg_dump backup, including the one that
+# creates a fresh database, so this line proves the image's PostgreSQL client
+# can dump the compose server's major (the provider checks the majors first).
+${COMPOSE} logs jellyfin | grep "PostgreSQL backup completed successfully" > /dev/null \
+    || die "migration backup log line missing (pg_dump absent or older than the server?)"
+
 info "completing the startup wizard"
 wizard() {
     step="$1"; shift
@@ -75,19 +82,23 @@ wizard first-user-set -X POST "${BASE_URL}/Startup/User" -H 'Content-Type: appli
 wizard complete -X POST "${BASE_URL}/Startup/Complete"
 
 info "authenticating"
-auth_header='X-Emby-Authorization: MediaBrowser Client="smoke", Device="ci", DeviceId="ci", Version="1"'
+# 12.x ignores the legacy X-Emby-Authorization / X-Emby-Token headers unless
+# EnableLegacyAuthorization is set, and a fresh server leaves it off, so the
+# smoke speaks the Authorization: MediaBrowser form throughout.
+auth_header='Authorization: MediaBrowser Client="smoke", Device="ci", DeviceId="ci", Version="1"'
 token="$(curl -sf -X POST "${BASE_URL}/Users/AuthenticateByName" \
     -H 'Content-Type: application/json' -H "${auth_header}" \
     -d '{"Username":"smoke","Pw":"smoketest"}' | jq -r '.AccessToken')"
 if [ -z "${token}" ] || [ "${token}" = "null" ]; then
     die "authentication failed"
 fi
-user_id="$(curl -sf "${BASE_URL}/Users/Me" -H "X-Emby-Token: ${token}" | jq -r '.Id')"
+token_header="Authorization: MediaBrowser Token=\"${token}\""
+user_id="$(curl -sf "${BASE_URL}/Users/Me" -H "${token_header}" | jq -r '.Id')"
 
 info "browsing twice and asserting cache hits"
 hits_before="$(keyspace_hits)"
-curl -sf "${BASE_URL}/Users/${user_id}/Items?Recursive=true&IncludeItemTypes=Movie" -H "X-Emby-Token: ${token}" > /dev/null
-curl -sf "${BASE_URL}/Users/${user_id}/Items?Recursive=true&IncludeItemTypes=Movie" -H "X-Emby-Token: ${token}" > /dev/null
+curl -sf "${BASE_URL}/Users/${user_id}/Items?Recursive=true&IncludeItemTypes=Movie" -H "${token_header}" > /dev/null
+curl -sf "${BASE_URL}/Users/${user_id}/Items?Recursive=true&IncludeItemTypes=Movie" -H "${token_header}" > /dev/null
 hits_after="$(keyspace_hits)"
 [ "${hits_after}" -gt "${hits_before}" ] || die "no cache hits after repeated browse (before=${hits_before} after=${hits_after})"
 [ "$(valkey DBSIZE)" -gt 0 ] || die "valkey holds no cache entries"
@@ -127,10 +138,10 @@ esac
 
 info "asserting writes invalidate and reads stay fresh"
 display_prefs_url="${BASE_URL}/DisplayPreferences/usersettings?userId=${user_id}&client=emby"
-curl -sf "${display_prefs_url}" -H "X-Emby-Token: ${token}" > /dev/null
-curl -sf -X POST "${display_prefs_url}" -H "X-Emby-Token: ${token}" -H 'Content-Type: application/json' \
+curl -sf "${display_prefs_url}" -H "${token_header}" > /dev/null
+curl -sf -X POST "${display_prefs_url}" -H "${token_header}" -H 'Content-Type: application/json' \
     -d '{"Id":"usersettings","SortBy":"SortName","SortOrder":"Descending","RememberIndexing":false,"PrimaryImageHeight":250,"PrimaryImageWidth":250,"CustomPrefs":{"smoke":"1"},"ScrollDirection":"Horizontal","ShowBackdrop":true,"RememberSorting":false,"ShowSidebar":false,"Client":"emby"}' > /dev/null
-fresh="$(curl -sf "${display_prefs_url}" -H "X-Emby-Token: ${token}" | jq -r '.CustomPrefs.smoke')"
+fresh="$(curl -sf "${display_prefs_url}" -H "${token_header}" | jq -r '.CustomPrefs.smoke')"
 [ "${fresh}" = "1" ] || die "stale read after write: expected CustomPrefs.smoke=1, got ${fresh}"
 
 # Fail-open must be INSTANT, not eventual.
@@ -150,7 +161,7 @@ fresh="$(curl -sf "${display_prefs_url}" -H "X-Emby-Token: ${token}" | jq -r '.C
 info "stopping valkey and asserting fail open is INSTANT"
 ${COMPOSE} stop valkey > /dev/null
 code="$(curl -s -o /dev/null -w '%{http_code}' \
-    "${BASE_URL}/Users/${user_id}/Items?Recursive=true" -H "X-Emby-Token: ${token}")"
+    "${BASE_URL}/Users/${user_id}/Items?Recursive=true" -H "${token_header}")"
 [ "${code}" = "200" ] || die "first request after valkey stop returned ${code}, expected 200 (closed-reader regression)"
 
 # A DEAD cache and a SLOW cache are different code paths, and only the dead one
@@ -163,11 +174,11 @@ code="$(curl -s -o /dev/null -w '%{http_code}' \
 info "pausing valkey and asserting fail open when the cache is SLOW rather than dead"
 ${COMPOSE} start valkey > /dev/null
 wait_healthy || die "server did not recover after restarting valkey"
-curl -sf "${BASE_URL}/Users/${user_id}/Items?Recursive=true" -H "X-Emby-Token: ${token}" > /dev/null \
+curl -sf "${BASE_URL}/Users/${user_id}/Items?Recursive=true" -H "${token_header}" > /dev/null \
     || die "warm-up request failed after valkey restart"
 ${COMPOSE} pause valkey > /dev/null
 code="$(curl -s -o /dev/null -w '%{http_code}' \
-    "${BASE_URL}/Users/${user_id}/Items?Recursive=true" -H "X-Emby-Token: ${token}")"
+    "${BASE_URL}/Users/${user_id}/Items?Recursive=true" -H "${token_header}")"
 ${COMPOSE} unpause valkey > /dev/null
 [ "${code}" = "200" ] || die "request against a paused (slow) valkey returned ${code}, expected 200 (closed-reader regression)"
 
