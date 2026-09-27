@@ -16,7 +16,9 @@ namespace Jellyfin.Plugin.Pgsql.Schema;
 ///    filter's LIKE branches and the relevance ordering's prefix matches
 ///    (added 2026-08-29; the plain-term strpos branch needs the server-side
 ///    LIKE patch to benefit).
-/// CONCURRENTLY keeps a busy library serving while indexes build; Npgsql
+///  - 2026-08-29 drift reconciliation: the two hand-made indexes the planner
+///    uses are codified, five zero-scan indexes (one of them ours) are dropped.
+/// CONCURRENTLY keeps a busy library serving while indexes build or drop; Npgsql
 /// autocommit raw commands satisfy its no-transaction requirement (the
 /// optimiser's VACUUM proves the same property).
 /// </summary>
@@ -37,10 +39,28 @@ public static class SchemaHardening
         // 3.4s to 1.9s before the query itself was split.
         "CREATE INDEX CONCURRENTLY IF NOT EXISTS \"IX_BaseItems_series_latest_cover\" ON \"BaseItems\" (\"TopParentId\", \"MediaType\", \"IsFolder\", \"IsVirtualItem\", \"SeriesName\", \"DateCreated\" DESC) INCLUDE (\"Id\", \"PresentationUniqueKey\")",
 
-        // Ordered partial index so the "newest unwatched item in this library"
-        // probe walks newest-first and stops, instead of fetching every candidate
-        // and sorting (5,231 rows fetched to return 1, measured).
-        "CREATE INDEX CONCURRENTLY IF NOT EXISTS \"IX_BaseItems_latest_ordered\" ON \"BaseItems\" (\"TopParentId\", \"DateCreated\" DESC) INCLUDE (\"MediaType\") WHERE \"IsFolder\" = false AND \"IsVirtualItem\" = false",
+        // Live drift reconciled 2026-08-29 from pg_stat_user_indexes (counters
+        // never reset). Two hand-made indexes are the ones the planner actually
+        // picks and were codified nowhere, so a rebuild from code would lose them:
+        // UserId_cover serves every per-row COALESCE(Played) probe index-only
+        // (1.12 billion scans, the most used index in the database, EXPLAIN
+        // confirmed); Type_SortName shows 56k scans but its consumer was not
+        // isolated in pg_stat_statements, so it is codified on the counter alone.
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS \"IX_UserData_UserId_cover\" ON \"UserData\" (\"UserId\", \"ItemId\") INCLUDE (\"Played\", \"PlaybackPositionTicks\", \"IsFavorite\")",
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS \"IX_BaseItems_Type_SortName\" ON \"BaseItems\" (\"Type\", \"SortName\") INCLUDE (\"Id\")",
+
+        // The same counters show five indexes with zero scans over their whole
+        // life, four hand-made and one of ours. IX_BaseItems_latest_ordered was
+        // meant to let the newest-unwatched probe walk newest-first and stop, but
+        // that statement wraps its candidates in GROUP BY PresentationUniqueKey,
+        // which forces the full grouped set through the series cover index before
+        // the top-N sort, so the ordered partial index is never eligible. Each is
+        // write amplification on the two hottest tables and nothing else.
+        "DROP INDEX CONCURRENTLY IF EXISTS \"IX_BaseItems_latest_ordered\"",
+        "DROP INDEX CONCURRENTLY IF EXISTS \"IX_BaseItems_TopParent_Type_SortName\"",
+        "DROP INDEX CONCURRENTLY IF EXISTS \"IX_UserData_UserId_Played\"",
+        "DROP INDEX CONCURRENTLY IF EXISTS \"IX_UserData_UserId_Resume\"",
+        "DROP INDEX CONCURRENTLY IF EXISTS \"IX_UserData_UserId_IsFavorite\"",
 
         // Search. The search filter and its relevance ordering reach BaseItems
         // through pattern predicates on CleanName and lower(OriginalTitle):

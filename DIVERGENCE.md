@@ -36,8 +36,42 @@ adds `pg_trgm` plus trigram GIN indexes on `CleanName` and
 ordering's prefix matches were sequential scans (0.93s alone, 4.8s p50 at
 20 concurrent). The plain-term branch is `string.Contains`, which Npgsql
 emits as `strpos()`, so it stays a scan until jellyfin-fork makes the server
-emit LIKE there; that half is tracked in the fork's DIVERGENCE. Ceiling:
-none, this is durable schema. Drop when: upstream adds equivalent
+emit LIKE there; that half is tracked in the fork's DIVERGENCE.
+
+2026-08-29 reconciles the live index set with this file, because the code
+is meant to be the source of truth and it was not: `pg_stat_user_indexes`
+(counters never reset, `pg_stat_database.stats_reset` is null) showed six
+BaseItems/UserData indexes that exist only in the live database, in neither
+upstream's EF model snapshot nor here. Two of them are what the planner
+actually picks and are now codified: `IX_UserData_UserId_cover` (UserId,
+ItemId) INCLUDE (Played, PlaybackPositionTicks, IsFavorite) serves every
+per-row `COALESCE((SELECT Played ...))` probe index-only, 1.12 billion scans,
+the most used index in the database, EXPLAIN of the grouped count shape
+confirms the index-only probe; `IX_BaseItems_Type_SortName` INCLUDE (Id),
+56k scans, whose consuming statement was not isolated in pg_stat_statements
+(the Series listing that looked likeliest takes the EF
+`IX_BaseItems_Type_TopParentId_PresentationUniqueKey` instead), so it is
+codified on the counter alone. Five indexes had zero scans for their whole life and are now
+dropped with `DROP INDEX CONCURRENTLY IF EXISTS`: the hand-made
+`IX_BaseItems_TopParent_Type_SortName`, `IX_UserData_UserId_Played`,
+`IX_UserData_UserId_Resume`, `IX_UserData_UserId_IsFavorite`, and our own
+`IX_BaseItems_latest_ordered`. That last one claimed the newest-unwatched
+probe would walk it newest-first and stop; EXPLAIN of the movies Latest
+statement shows the `GROUP BY PresentationUniqueKey` wrapper forces the full
+grouped set (1,104 rows) through `IX_BaseItems_series_latest_cover` plus PK
+probes before the top-16 sort, so an ordered partial index is never eligible
+for that shape. Gain is write amplification only (UserData takes ~5.5k row
+writes/day, two thirds non-HOT; BaseItems ~2.4k/day) and ~5.7 MB; the value
+is that a rebuild from code now reproduces today's plans and the optimiser
+stops re-asserting a dead index every run. The EF index
+`IX_UserData_ItemId_UserId_Played` can serve the same (ItemId, UserId) to
+Played probe index-only, so losing `UserId_cover` would have been a plan
+change rather than a slowdown; it is codified so the plan stays the one that
+was measured. Verify after the next optimiser run: `SELECT indexrelname,
+idx_scan FROM pg_stat_user_indexes WHERE relname IN ('BaseItems','UserData')`
+should list the two codified indexes and none of the five dropped ones.
+
+Ceiling: none, this is durable schema. Drop when: upstream adds equivalent
 indexes/constraints to the EF model (offer the migration upstream).
 
 ## 0004 connection pool warming
