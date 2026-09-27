@@ -4,14 +4,17 @@ using System.Diagnostics.CodeAnalysis;
 namespace Jellyfin.Plugin.Pgsql.Schema;
 
 /// <summary>
-/// Idempotent schema hardening the scheduled optimiser ensures on every run.
-/// Upstream's EF model does not carry these; all three were proven live in
-/// production first (2026-07-13):
-///  - unique (UserId, Kind) on Permissions/Preferences: a retry loop once
-///    grew Permissions to 251,568 rows for 11 users and put the auth-path
-///    join at 3.2s per request. The constraint makes regrowth impossible.
+/// Idempotent schema hardening the scheduled optimiser ensures on every run
+/// (and, since 12.1, right after a migration batch). Upstream's EF model does
+/// not carry these; each was proven live in production first:
 ///  - IX_BaseItems_latest_path: filter+sort path for the Latest/browse
-///    family (images p95 1.04s -&gt; 160ms under k6 load).
+///    family (images p95 1.04s -&gt; 160ms under k6 load, 2026-07-13).
+///  - 12.1 retires our unique (UserId, Kind) guards on Permissions and
+///    Preferences: upstream's 20260815063607 deletes the orphan rows and makes
+///    its own IX_Permissions_UserId_Kind / IX_Preferences_UserId_Kind unique
+///    and unfiltered, so the twins are dropped. They stopped a retry loop that
+///    once grew Permissions to 251,568 rows for 11 users; upstream's index now
+///    does that.
 ///  - pg_trgm + trigram GIN on CleanName / lower(OriginalTitle): the search
 ///    filter's LIKE branches and the relevance ordering's prefix matches
 ///    (added 2026-08-29; the plain-term strpos branch needs the server-side
@@ -28,8 +31,14 @@ public static class SchemaHardening
     /// <summary>Gets the DDL the optimiser ensures, in order.</summary>
     public static IReadOnlyList<string> Statements { get; } = new[]
     {
-        "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS \"IX_Permissions_UserId_Kind_unique\" ON \"Permissions\" (\"UserId\", \"Kind\")",
-        "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS \"IX_Preferences_UserId_Kind_unique\" ON \"Preferences\" (\"UserId\", \"Kind\")",
+        // Upstream owns unique (UserId, Kind) on both tables since 12.1; the EF
+        // migrations create it before the optimiser runs, so uniqueness never lapses.
+        "DROP INDEX CONCURRENTLY IF EXISTS \"IX_Permissions_UserId_Kind_unique\"",
+        "DROP INDEX CONCURRENTLY IF EXISTS \"IX_Preferences_UserId_Kind_unique\"",
+
+        // Overlaps 12.1's IX_BaseItems_TopParentId_MediaType_IsVirtualItem_DateCreated
+        // but is not the same index (IsFolder, DESC); kept until pg_stat_user_indexes
+        // shows the planner has stopped using it.
         "CREATE INDEX CONCURRENTLY IF NOT EXISTS \"IX_BaseItems_latest_path\" ON \"BaseItems\" (\"TopParentId\", \"MediaType\", \"IsFolder\", \"IsVirtualItem\", \"DateCreated\" DESC)",
 
         // The Latest row groups episodes into series, and EF nests that grouping
@@ -46,6 +55,10 @@ public static class SchemaHardening
         // (1.12 billion scans, the most used index in the database, EXPLAIN
         // confirmed); Type_SortName shows 56k scans but its consumer was not
         // isolated in pg_stat_statements, so it is codified on the counter alone.
+        // 12.1 adds UserData (UserId, ItemId, LastPlayedDate), (UserId, Played,
+        // ItemId), (UserId, IsFavorite, ItemId) and BaseItems (Type, TopParentId,
+        // SortName); none is the same index, so both stay until the counters
+        // show the planner has moved to upstream's.
         "CREATE INDEX CONCURRENTLY IF NOT EXISTS \"IX_UserData_UserId_cover\" ON \"UserData\" (\"UserId\", \"ItemId\") INCLUDE (\"Played\", \"PlaybackPositionTicks\", \"IsFavorite\")",
         "CREATE INDEX CONCURRENTLY IF NOT EXISTS \"IX_BaseItems_Type_SortName\" ON \"BaseItems\" (\"Type\", \"SortName\") INCLUDE (\"Id\")",
 
