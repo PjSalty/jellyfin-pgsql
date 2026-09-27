@@ -22,7 +22,7 @@ one process start per migration backup.
  1 file changed, 70 insertions(+)
 
 diff --git a/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs b/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs
-index 930325d..45aafb8 100644
+index 18296f2..d72906d 100644
 --- a/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs
 +++ b/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs
 @@ -1,5 +1,6 @@
@@ -32,7 +32,7 @@ index 930325d..45aafb8 100644
  using System.Data.Common;
  using System.Diagnostics;
  using System.Diagnostics.CodeAnalysis;
-@@ -203,6 +204,8 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
+@@ -204,6 +205,8 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
          var connectionBuilder = GetConnectionBuilder(null);
          var backupFile = Path.Combine(backupFolder, $"{key}_{connectionBuilder.Database}.sql");
  
@@ -41,7 +41,7 @@ index 930325d..45aafb8 100644
          var process = new Process
          {
              StartInfo = new ProcessStartInfo
-@@ -448,6 +451,73 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
+@@ -469,6 +472,73 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
          SecondLevelCacheFactory.FlushCache(_logger);
      }
  

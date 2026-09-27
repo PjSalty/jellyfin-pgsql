@@ -70,7 +70,7 @@ How it was checked: each Designer target model is the previous one plus its step
 - 12.1 calls `RunScheduledOptimisation` right after every migration batch, `--mode MigrateSystem` included, so `VACUUM ANALYZE` and the hardening statements run at the end of each migration pass, not only on the scheduled task.
 - Migrations run under the provider's command timeout (`POSTGRES_COMMAND_TIMEOUT`, default 30 s). The heaviest 12.1 step, the `BaseItems` rewrite for the uuid columns plus its index rebuilds, took under 3 s on a 48k-item library; raise the timeout for the migration pass on libraries an order of magnitude larger.
 - The rollback restore (patch 0008) is strict, so the dump must load cleanly into the server it came from. pg_dump 17+ writes `SET transaction_timeout`, which PostgreSQL 16 and older reject: with a client newer than the server the rollback now fails instead of limping through. Keep the client major equal to the server major; patch 0009 refuses an older client and warns about a newer one.
-- The rollback restore (patch 0008) creates a second database, so the role needs `CREATEDB`: the bootstrap superuser the official postgres image creates has it, a non-superuser owner role must be granted it. The swap ends the other sessions on the database first, which needs superuser, `pg_signal_backend` or the same role; otherwise the swap gives up after 10 attempts and leaves the configured database unchanged. The server needs free disk for a second full copy of the database while both exist, and the failed pass (`<db>_failed_<stamp>`) stays until an operator removes it. The new database takes the server's default encoding and locale, and database-level settings of the original (`ALTER DATABASE ... SET`, database grants, comments) are not carried over. Extensions come back from the dump's `CREATE EXTENSION` statements; untrusted ones (`pg_stat_statements`, `pg_buffercache`, `pg_prewarm`, `amcheck`) need a superuser. The maintenance database must be named `postgres`, and the database name must leave room for the 23-byte suffix within PostgreSQL's 63-byte identifier limit.
+- The rollback restore (patch 0008) creates a second database, so the role needs `CREATEDB`: the bootstrap superuser the official postgres image creates has it, a non-superuser owner role must be granted it. The swap ends the other sessions on the database first, which needs superuser, `pg_signal_backend` or the same role; otherwise the swap gives up after 30 attempts (about a minute) and leaves the configured database unchanged. The server needs free disk for a second full copy of the database while both exist, and the failed pass (`<db>_failed_<stamp>`) stays until an operator removes it. The new database takes the server's default encoding and locale, and database-level settings of the original (`ALTER DATABASE ... SET`, database grants, comments) are not carried over. Extensions come back from the dump's `CREATE EXTENSION` statements; untrusted ones (`pg_stat_statements`, `pg_buffercache`, `pg_prewarm`, `amcheck`) need a superuser. The maintenance database must be named `postgres`, and the database name must leave room for the 23-byte suffix within PostgreSQL's 63-byte identifier limit.
 
 ## 0004 schema hardening via the scheduled optimiser
 
@@ -231,10 +231,13 @@ copy, and never drops anything:
    restore database are logged, and the restore throws.
 3. The pools are cleared, `<db>` is renamed to `<db>_failed_<stamp>` and
    the restore database to `<db>`. Each rename first ends the other sessions
-   on its database (`pg_terminate_backend` over `pg_stat_activity`) and is
-   retried up to 10 times, 1 s apart, because monitoring sidecars reconnect
-   on every scrape. If the second rename fails, the failed pass is renamed
-   back so the server always finds a database.
+   on its database (`pg_terminate_backend` over `pg_stat_activity`) from a
+   fresh maintenance session and is retried up to 30 times, 2 s apart, on
+   server errors and lost connections: monitoring sidecars reconnect on every
+   scrape, and a server restart between the two renames must not strand every
+   retry on a dead session. If the second rename fails, the failed pass is
+   renamed back so the server always finds a database; if that fails too, the
+   log names the exact `ALTER DATABASE` statement that serves the backup.
 4. Warnings name the database that now holds the backup and the one that
    holds the failed pass, which stays for the operator.
 
