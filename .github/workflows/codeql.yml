@@ -19,7 +19,7 @@ jobs:
 
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 9.0.x
+          dotnet-version: 10.0.x
 
       - uses: github/codeql-action/init@v3
         with:
@@ -29,6 +29,6 @@ jobs:
       - name: Assemble and build
         run: |
           ./build/assemble.sh
-          dotnet build upstream/Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj -c Release -p:NoWarn=CA1707
+          dotnet build upstream/Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj -c Release
 
       - uses: github/codeql-action/analyze@v3
