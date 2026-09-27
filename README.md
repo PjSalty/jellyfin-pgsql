@@ -29,7 +29,7 @@ unzip jellyfin-pgsql-12.1-0-salty.1.zip -d /path/to/config/plugins/PostgreSQL
 
 Release tags read `<server>-<upstream plugin release>-salty.<rev>`: `12.1-0-salty.1` is built for Jellyfin 12.1, from a pinned upstream commit because upstream has no 12.x release yet (the `0`), and is this repo's first revision for that pair. The 10.11 line used the same scheme, e.g. `10.11.11-1-salty.1`. Match the server part to your server.
 
-The server needs the PostgreSQL client tools (`pg_dump`, `psql`) at the same major as the database: every migration pass starts with a `pg_dump` backup, `pg_dump` refuses a newer server, and the rollback restore stops on settings an older server does not know. `docker/Dockerfile` installs `postgresql-client-18`.
+The server needs the PostgreSQL client tools (`pg_dump`, `psql`) at the same major as the database: every migration pass starts with a `pg_dump` backup, `pg_dump` refuses a newer server, and the rollback restore stops on settings an older server does not know. `docker/Dockerfile` installs `postgresql-client-18`. If a migration fails, the rollback restores that backup into a new database beside yours and swaps the names, keeping the failed pass as `<db>_failed_<timestamp>` for you to inspect and remove; the database role needs `CREATEDB` and the server needs room for a second copy of the database (see DIVERGENCE.md, patch 0008).
 
 Or build it yourself and drop the output into the plugin folder:
 

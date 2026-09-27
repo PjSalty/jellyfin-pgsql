@@ -11,26 +11,64 @@ Statements live in Schema/SchemaHardening.cs (overlay); each is idempotent
 and a failing statement never stops the pass. 12.1 also runs the optimiser
 right after a migration batch, so the hardening lands in the same pass that
 migrated the schema.
+A CREATE INDEX CONCURRENTLY that is cancelled or fails (statement timeout,
+lock timeout, a restart mid-build) leaves an INVALID index behind, and IF NOT
+EXISTS then skips it on every later pass: the planner never uses it while
+writes keep maintaining it. Before each CREATE the pass now reads
+pg_index.indisvalid with a plain ADO.NET command on the context's
+connection, so the second level cache interceptor never sees the probe, and
+an invalid index is logged, dropped with DROP INDEX CONCURRENTLY IF EXISTS
+and built again.
 Drop when: upstream's EF model carries equivalent indexes.
 Ceiling: CREATE/DROP INDEX CONCURRENTLY outside a transaction, one statement
-at a time, under the provider's command timeout.
+at a time, under the provider's command timeout. An index that keeps timing
+out is rebuilt, and left invalid again, on every pass until the timeout is
+raised; each attempt logs a warning.
 ---
- .../Database/PgSqlDatabaseProvider.cs          | 18 ++++++++++++++++++
- 1 file changed, 18 insertions(+)
+ .../Database/PgSqlDatabaseProvider.cs         | 49 +++++++++++++++++++
+ 1 file changed, 49 insertions(+)
 
 diff --git a/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs b/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs
-index 7f00f2d..43f51d7 100644
+index 7f00f2d..9978b70 100644
 --- a/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs
 +++ b/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs
-@@ -98,6 +98,24 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
+@@ -1,10 +1,12 @@
+ using System;
+ using System.Collections.Generic;
++using System.Data.Common;
+ using System.Diagnostics;
+ using System.Globalization;
+ using System.IO;
+ using System.Linq;
+ using System.Reflection;
++using System.Text.RegularExpressions;
+ using System.Threading;
+ using System.Threading.Tasks;
+ using Jellyfin.Database.Implementations;
+@@ -98,10 +100,57 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
              {
                  await context.Database.ExecuteSqlRawAsync("VACUUM ANALYZE", cancellationToken).ConfigureAwait(false);
                  _logger.LogInformation("PostgreSQL database optimized successfully");
 +
++                // Plain ADO.NET on the context's connection for the validity probe,
++                // so the second level cache interceptor never sees (or caches) it.
++                await context.Database.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
++                var connection = context.Database.GetDbConnection();
 +                foreach (var statement in Schema.SchemaHardening.Statements)
 +                {
 +                    try
 +                    {
++                        // A cancelled or failed CREATE INDEX CONCURRENTLY leaves an
++                        // INVALID index behind, and IF NOT EXISTS then skips it
++                        // forever: the planner never uses it, writes still maintain it.
++                        var index = Regex.Match(statement, "^CREATE INDEX CONCURRENTLY IF NOT EXISTS \"([^\"]+)\"", RegexOptions.CultureInvariant);
++                        if (index.Success && await IsInvalidIndexAsync(connection, index.Groups[1].Value, cancellationToken).ConfigureAwait(false))
++                        {
++                            _logger.LogWarning("Index {Index} is invalid (an earlier build was interrupted), rebuilding it", index.Groups[1].Value);
++                            var rebuild = "DROP INDEX CONCURRENTLY IF EXISTS \"" + index.Groups[1].Value + "\"";
++                            await context.Database.ExecuteSqlRawAsync(rebuild, cancellationToken).ConfigureAwait(false);
++                        }
++
 +                        await context.Database.ExecuteSqlRawAsync(statement, cancellationToken).ConfigureAwait(false);
 +                    }
 +                    catch (Exception ex)
@@ -47,6 +85,24 @@ index 7f00f2d..43f51d7 100644
              }
          }
      }
+ 
++    private static async Task<bool> IsInvalidIndexAsync(DbConnection connection, string name, CancellationToken cancellationToken)
++    {
++        var command = connection.CreateCommand();
++        await using (command.ConfigureAwait(false))
++        {
++            command.CommandText = "SELECT NOT i.indisvalid FROM pg_index i WHERE i.indexrelid = to_regclass(quote_ident(@name))";
++            var parameter = command.CreateParameter();
++            parameter.ParameterName = "name";
++            parameter.Value = name;
++            command.Parameters.Add(parameter);
++            return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is true;
++        }
++    }
++
+     /// <inheritdoc/>
+     public void OnModelCreating(ModelBuilder modelBuilder)
+     {
 -- 
 2.55.0
 

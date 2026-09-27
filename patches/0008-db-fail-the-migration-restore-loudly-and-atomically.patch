@@ -3,31 +3,101 @@ From: Salty <99386653+PjSalty@users.noreply.github.com>
 Date: Sat, 26 Sep 2026 19:16:01 -0500
 Subject: [PATCH 08/11] db: fail the migration restore loudly and atomically
 
-Intent: make RestoreBackupFast either restore the pre-migration backup
-completely or fail visibly. psql continues after a failed statement and
-exits 0, so a --clean restore that broke half way logged success over a
-half-restored database; it now runs with ON_ERROR_STOP, in a single
-transaction that rolls back on the first error, and without ~/.psqlrc. A
-missing backup file throws instead of returning, so the migration service
-reports the rollback as failed rather than as attempted.
-Drop when: upstream restores atomically and fails on a missing backup.
-Ceiling: the dump must load cleanly into the server it came from. pg_dump
-17+ writes SET transaction_timeout, which PostgreSQL 16 and older reject, so
-a client newer than the server now makes the rollback fail instead of
-limping through; keep the client major equal to the server major. The single
-transaction holds its locks until the end, so the restore waits behind any
-other session still holding locks on the tables it drops.
+Intent: make RestoreBackupFast either put the pre-migration backup in place
+completely or fail visibly, and never destroy either state on the way. The
+old restore replayed a --clean dump over the live database. Once any 12.1
+step had committed it could not work: the dump cannot drop PK_BaseItems
+while the foreign keys 12.1 creates (the LinkedChildren keys and
+FK_BaseItems_BaseItems_OwnerId) depend on it, so every rollback after the
+first migration step failed.
+The restore now happens beside the database and swaps:
+1. From the maintenance database "postgres" (same host, port, user and
+   password), CREATE DATABASE "<db>_restore_<utc stamp>" OWNER the
+   configured user TEMPLATE template0.
+2. psql loads the backup into that new database with ON_ERROR_STOP,
+   --single-transaction and --no-psqlrc, draining both pipes. On failure
+   the configured database is untouched, the error and the name of the
+   leftover restore database are logged, and the restore throws.
+3. Pools are cleared, then "<db>" is renamed to "<db>_failed_<stamp>" and
+   the restore database to "<db>". Each rename ends the other sessions on
+   its database first and retries up to 10 times, 1 s apart, because
+   monitoring sidecars reconnect on every scrape. If the second rename
+   fails, the failed pass is renamed back so the server always finds a
+   database, and every step is logged.
+4. A warning names the database that now holds the backup and the one that
+   holds the failed pass. Nothing is ever dropped; the failed pass stays for
+   the operator.
+The backup no longer uses --clean --if-exists: it only ever loads into an
+empty database, so it carries no statement that drops anything. A missing
+backup file throws instead of returning, so the migration service reports
+the rollback as failed rather than as attempted.
+Drop when: upstream restores without dropping the live database and fails
+on a missing backup.
+Ceiling: the role needs CREATEDB (the bootstrap superuser the official
+postgres image creates has it; a non-superuser owner role must be granted
+it) and must be able to end the other sessions on the database (superuser,
+pg_signal_backend, or the same role), or the swap gives up after 10
+attempts with the configured database unchanged. The server needs free
+disk for a second full copy of the database, and a maintenance database
+named "postgres". The new database gets the server's default encoding and
+locale, and database-level settings of the original (ALTER DATABASE ...
+SET, database grants and comments) are not carried over. Extensions come
+back from the dump's CREATE EXTENSION statements; extensions that are not
+trusted (pg_stat_statements, pg_buffercache, pg_prewarm, amcheck) need a
+superuser to restore. The database name must leave room for the 23-byte
+suffix within PostgreSQL's 63-byte limit. pg_dump 17+ writes SET
+transaction_timeout, which PostgreSQL 16 and older reject, so keep the
+client major equal to the server major.
 ---
- .../Database/PgSqlDatabaseProvider.cs                 | 11 ++++++++---
- 1 file changed, 8 insertions(+), 3 deletions(-)
+ .../Database/PgSqlDatabaseProvider.cs         | 144 ++++++++++++++++--
+ 1 file changed, 135 insertions(+), 9 deletions(-)
 
 diff --git a/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs b/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs
-index ca50c42..e15819a 100644
+index bc82bff..930325d 100644
 --- a/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs
 +++ b/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs
-@@ -212,18 +212,23 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
+@@ -2,10 +2,12 @@ using System;
+ using System.Collections.Generic;
+ using System.Data.Common;
+ using System.Diagnostics;
++using System.Diagnostics.CodeAnalysis;
+ using System.Globalization;
+ using System.IO;
+ using System.Linq;
+ using System.Reflection;
++using System.Text;
+ using System.Text.RegularExpressions;
+ using System.Threading;
+ using System.Threading.Tasks;
+@@ -27,6 +29,9 @@ namespace Jellyfin.Plugin.Pgsql.Database;
+ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
+ {
+     private const string BackupFolderName = "PgsqlBackups";
++    private const string MaintenanceDatabase = "postgres";
++    private const int MaxIdentifierBytes = 63;
++    private const int RenameAttempts = 10;
+     private readonly ILogger<PgSqlDatabaseProvider> _logger;
+     private readonly IApplicationPaths _applicationPaths;
+ 
+@@ -203,7 +208,10 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
+             StartInfo = new ProcessStartInfo
+             {
+                 FileName = "pg_dump",
+-                Arguments = $"--host={connectionBuilder.Host} --port={connectionBuilder.Port} --username={connectionBuilder.Username} --dbname={connectionBuilder.Database} --file=\"{backupFile}\" --no-password --verbose --clean --if-exists",
++
++                // No --clean: RestoreBackupFast loads the dump into a new, empty
++                // database, so the backup carries no statement that drops anything.
++                Arguments = $"--host={connectionBuilder.Host} --port={connectionBuilder.Port} --username={connectionBuilder.Username} --dbname={connectionBuilder.Database} --file=\"{backupFile}\" --no-password --verbose",
+                 Environment = { ["PGPASSWORD"] = connectionBuilder.Password },
+                 UseShellExecute = false,
+                 RedirectStandardOutput = true,
+@@ -241,20 +249,80 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
+         NpgsqlConnection.ClearAllPools();
+ 
          var connectionBuilder = GetConnectionBuilder(null);
-         var backupFile = Path.Combine(_applicationPaths.DataPath, BackupFolderName, $"{key}_{connectionBuilder.Database}.sql");
+-        var backupFile = Path.Combine(_applicationPaths.DataPath, BackupFolderName, $"{key}_{connectionBuilder.Database}.sql");
++        var database = connectionBuilder.Database ?? throw new InvalidOperationException("No PostgreSQL database is configured, nothing was restored");
++        var backupFile = Path.Combine(_applicationPaths.DataPath, BackupFolderName, $"{key}_{database}.sql");
  
 +        // Throw instead of returning: the migration service then reports the
 +        // rollback as failed (manual intervention) rather than as attempted.
@@ -38,20 +108,154 @@ index ca50c42..e15819a 100644
 +            throw new FileNotFoundException($"PostgreSQL backup {key} does not exist, nothing was restored", backupFile);
          }
  
-+        // psql keeps going after a failed statement and still exits 0, so a
-+        // --clean restore that broke half way used to log success over a
-+        // half-restored database. ON_ERROR_STOP makes the first error fatal and
-+        // --single-transaction rolls the whole restore back with it.
-         var process = new Process
+-        var process = new Process
++        // Restore beside the database and swap, never over it: a failed migration
++        // pass can leave objects the backup cannot clean away (12.1's foreign keys
++        // onto PK_BaseItems block every drop of that key), and a restore that
++        // drops what it replaces is one error away from losing both states.
++        var stamp = DateTime.UtcNow.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture);
++        var restoreDatabase = $"{database}_restore_{stamp}";
++        var failedDatabase = $"{database}_failed_{stamp}";
++        if (Encoding.UTF8.GetByteCount(restoreDatabase) > MaxIdentifierBytes)
++        {
++            throw new InvalidOperationException($"Database name {database} is too long for a restore beside it ({restoreDatabase} exceeds {MaxIdentifierBytes} bytes), nothing was restored");
++        }
++
++        // The database being replaced cannot be renamed from a session on it.
++        var maintenanceBuilder = new NpgsqlConnectionStringBuilder(connectionBuilder.ConnectionString) { Database = MaintenanceDatabase, Pooling = false };
++        var maintenance = new NpgsqlConnection(maintenanceBuilder.ConnectionString);
++        await using (maintenance.ConfigureAwait(false))
++        {
++            await maintenance.OpenAsync(cancellationToken).ConfigureAwait(false);
++
++            // template0: the dump brings every object, template1 may carry extras.
++            await ExecuteAsync(maintenance, $"CREATE DATABASE {QuoteIdentifier(restoreDatabase)} OWNER {QuoteIdentifier(connectionBuilder.Username!)} TEMPLATE template0", cancellationToken).ConfigureAwait(false);
++            _logger.LogWarning("Restoring PostgreSQL backup {BackupFile} into new database {RestoreDatabase}; {Database} stays untouched until the restore completes", backupFile, restoreDatabase, database);
++
++            try
++            {
++                await RunPsqlRestoreAsync(connectionBuilder, restoreDatabase, backupFile, cancellationToken).ConfigureAwait(false);
++            }
++            catch (Exception ex)
++            {
++                _logger.LogError(ex, "PostgreSQL restore into new database {RestoreDatabase} failed and that database stays for inspection; nothing removes it automatically. {Database} was not changed and still holds the state the failed migration left", restoreDatabase, database);
++                throw;
++            }
++
++            // No cancellation from here: stopping between the two renames would
++            // leave no database under the configured name.
++            await SwapDatabasesAsync(maintenance, database, restoreDatabase, failedDatabase).ConfigureAwait(false);
++        }
++
++        _logger.LogWarning("PostgreSQL restore completed: {Database} now holds backup {BackupFile}. The failed migration pass is kept as database {FailedDatabase} for inspection; nothing removes it automatically", database, backupFile, failedDatabase);
++    }
++
++    private static string QuoteIdentifier(string identifier) => "\"" + identifier.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
++
++    [SuppressMessage("Security", "CA2100:Review SQL queries for security vulnerabilities", Justification = "DDL takes no parameters; every identifier passes QuoteIdentifier")]
++    private static async Task ExecuteAsync(NpgsqlConnection connection, string sql, CancellationToken cancellationToken)
++    {
++        var command = new NpgsqlCommand(sql, connection);
++        await using (command.ConfigureAwait(false))
++        {
++            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
++        }
++    }
++
++    private async Task RunPsqlRestoreAsync(NpgsqlConnectionStringBuilder connectionBuilder, string targetDatabase, string backupFile, CancellationToken cancellationToken)
++    {
++        // psql keeps going after a failed statement and still exits 0, so
++        // ON_ERROR_STOP makes the first error fatal and --single-transaction
++        // rolls the whole restore back with it.
++        using var process = new Process
          {
              StartInfo = new ProcessStartInfo
              {
                  FileName = "psql",
 -                Arguments = $"--host={connectionBuilder.Host} --port={connectionBuilder.Port} --username={connectionBuilder.Username} --dbname={connectionBuilder.Database} --file=\"{backupFile}\" --no-password --quiet",
-+                Arguments = $"--host={connectionBuilder.Host} --port={connectionBuilder.Port} --username={connectionBuilder.Username} --dbname={connectionBuilder.Database} --file=\"{backupFile}\" --no-password --quiet --no-psqlrc --set=ON_ERROR_STOP=1 --single-transaction",
++                Arguments = $"--host={connectionBuilder.Host} --port={connectionBuilder.Port} --username={connectionBuilder.Username} --dbname={targetDatabase} --file=\"{backupFile}\" --no-password --quiet --no-psqlrc --set=ON_ERROR_STOP=1 --single-transaction",
                  Environment = { ["PGPASSWORD"] = connectionBuilder.Password },
                  UseShellExecute = false,
                  RedirectStandardOutput = true,
+@@ -263,8 +331,6 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
+             }
+         };
+ 
+-        _logger.LogInformation("Starting PostgreSQL restore from: {BackupFile}", backupFile);
+-
+         process.Start();
+ 
+         // Same reason as MigrationBackupFast: read the pipes while psql runs so a
+@@ -280,8 +346,68 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
+             _logger.LogError("psql restore failed with exit code {ExitCode}: {Error}", process.ExitCode, error);
+             throw new InvalidOperationException($"psql restore failed: {error}");
+         }
++    }
++
++    private async Task SwapDatabasesAsync(NpgsqlConnection maintenance, string database, string restoreDatabase, string failedDatabase)
++    {
++        NpgsqlConnection.ClearAllPools();
++
++        try
++        {
++            await RenameDatabaseAsync(maintenance, database, failedDatabase).ConfigureAwait(false);
++        }
++        catch (Exception ex)
++        {
++            _logger.LogError(ex, "Could not move {Database} aside, so it was not changed and still holds the state the failed migration left. The restored backup is complete in database {RestoreDatabase}; nothing removes it automatically", database, restoreDatabase);
++            throw;
++        }
+ 
+-        _logger.LogInformation("PostgreSQL restore completed successfully from: {BackupFile}", backupFile);
++        try
++        {
++            await RenameDatabaseAsync(maintenance, restoreDatabase, database).ConfigureAwait(false);
++        }
++        catch (Exception ex)
++        {
++            _logger.LogCritical(ex, "Could not move restored database {RestoreDatabase} to {Database}; renaming {FailedDatabase} back so the server finds a database", restoreDatabase, database, failedDatabase);
++            try
++            {
++                await RenameDatabaseAsync(maintenance, failedDatabase, database).ConfigureAwait(false);
++            }
++            catch (Exception backEx)
++            {
++                _logger.LogCritical(backEx, "No database has the configured name {Database}: renaming the failed migration pass {FailedDatabase} back failed too. The restored backup is in {RestoreDatabase}", database, failedDatabase, restoreDatabase);
++            }
++
++            throw;
++        }
++    }
++
++    // A database with sessions on it cannot be renamed, and monitoring sidecars
++    // reconnect on every scrape, so end the sessions and retry for a while.
++    private async Task RenameDatabaseAsync(NpgsqlConnection maintenance, string from, string to)
++    {
++        for (var attempt = 1; ; attempt++)
++        {
++            try
++            {
++                var terminate = new NpgsqlCommand("SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity WHERE datname = @name AND pid <> pg_backend_pid()", maintenance);
++                long terminated;
++                await using (terminate.ConfigureAwait(false))
++                {
++                    terminate.Parameters.AddWithValue("name", from);
++                    terminated = (long)(await terminate.ExecuteScalarAsync(CancellationToken.None).ConfigureAwait(false))!;
++                }
++
++                await ExecuteAsync(maintenance, $"ALTER DATABASE {QuoteIdentifier(from)} RENAME TO {QuoteIdentifier(to)}", CancellationToken.None).ConfigureAwait(false);
++                _logger.LogWarning("Renamed database {From} to {To} (attempt {Attempt}, {Terminated} sessions ended)", from, to, attempt, terminated);
++                return;
++            }
++            catch (PostgresException ex) when (attempt < RenameAttempts)
++            {
++                _logger.LogWarning(ex, "Renaming database {From} to {To} failed on attempt {Attempt} of {Attempts}, retrying", from, to, attempt, RenameAttempts);
++                await Task.Delay(TimeSpan.FromSeconds(1), CancellationToken.None).ConfigureAwait(false);
++            }
++        }
+     }
+ 
+     /// <inheritdoc/>
 -- 
 2.55.0
 

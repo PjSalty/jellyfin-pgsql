@@ -23,7 +23,10 @@ namespace Jellyfin.Plugin.Pgsql.Schema;
 ///    uses are codified, five zero-scan indexes (one of them ours) are dropped.
 /// CONCURRENTLY keeps a busy library serving while indexes build or drop; Npgsql
 /// autocommit raw commands satisfy its no-transaction requirement (the
-/// optimiser's VACUUM proves the same property).
+/// optimiser's VACUUM proves the same property). An interrupted CONCURRENTLY
+/// build leaves an INVALID index that IF NOT EXISTS would skip forever, so the
+/// optimiser checks pg_index.indisvalid before each CREATE and rebuilds an
+/// invalid index (patch 0004).
 /// </summary>
 [SuppressMessage("StyleCop.CSharp.ReadabilityRules", "SA1118", Justification = "long index DDL reads better wrapped")]
 public static class SchemaHardening

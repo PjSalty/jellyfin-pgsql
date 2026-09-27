@@ -18,27 +18,21 @@ Drop when: upstream checks the client version itself.
 Ceiling: majors only; the probe costs one extra short-lived connection and
 one process start per migration backup.
 ---
- .../Database/PgSqlDatabaseProvider.cs         | 71 +++++++++++++++++++
- 1 file changed, 71 insertions(+)
+ .../Database/PgSqlDatabaseProvider.cs         | 70 +++++++++++++++++++
+ 1 file changed, 70 insertions(+)
 
 diff --git a/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs b/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs
-index e15819a..cadeaf9 100644
+index 930325d..45aafb8 100644
 --- a/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs
 +++ b/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs
-@@ -1,10 +1,12 @@
+@@ -1,5 +1,6 @@
  using System;
  using System.Collections.Generic;
 +using System.ComponentModel;
+ using System.Data.Common;
  using System.Diagnostics;
- using System.Globalization;
- using System.IO;
- using System.Linq;
- using System.Reflection;
-+using System.Text.RegularExpressions;
- using System.Threading;
- using System.Threading.Tasks;
- using Jellyfin.Database.Implementations;
-@@ -167,6 +169,8 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
+ using System.Diagnostics.CodeAnalysis;
+@@ -203,6 +204,8 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
          var connectionBuilder = GetConnectionBuilder(null);
          var backupFile = Path.Combine(backupFolder, $"{key}_{connectionBuilder.Database}.sql");
  
@@ -47,7 +41,7 @@ index e15819a..cadeaf9 100644
          var process = new Process
          {
              StartInfo = new ProcessStartInfo
-@@ -296,6 +300,73 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
+@@ -448,6 +451,73 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
          SecondLevelCacheFactory.FlushCache(_logger);
      }
  

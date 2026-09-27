@@ -11,11 +11,11 @@ Applied in order by `build/assemble.sh`; regenerate them with `git format-patch 
 | `0001-build-retarget-the-provider-to-Jellyfin-12.1-on-net1.patch` | net10.0; Jellyfin.Controller and Jellyfin.Model 12.1.0; EF Core and Microsoft.Extensions at the host's exact 10.0.11 pins, `PrivateAssets` all so none of them ship; Npgsql and its EF provider 10.0.3; dotnet-ef 10.0.11; `build.yaml` targetAbi 12.1.0.0. The .NET 10 SDK's CA1873 is lowered to Info in the ruleset, as the 12.1 server lowers it | upstream publishes a 12.x release |
 | `0002-cache-add-EF-second-level-cache-packages.patch` | EFCoreSecondLevelCacheInterceptor and its StackExchange.Redis provider 5.5.1 in the publish output | upstream ships a second level cache of its own |
 | `0003-cache-wire-the-Valkey-second-level-cache-into-the-pr.patch` | registers the cache interceptor in `Initialise` (fail open, off by default) and flushes the cache after `PurgeDatabase` | upstream accepts an equivalent hook |
-| `0004-schema-ensure-prod-proven-indexes-during-scheduled-o.patch` | runs `Schema/SchemaHardening.cs` after `VACUUM ANALYZE` in `RunScheduledOptimisation`, one statement at a time, never failing the pass | upstream's EF model carries equivalent indexes |
+| `0004-schema-ensure-prod-proven-indexes-during-scheduled-o.patch` | runs `Schema/SchemaHardening.cs` after `VACUUM ANALYZE` in `RunScheduledOptimisation`, one statement at a time, never failing the pass; an INVALID index left by an interrupted `CONCURRENTLY` build is dropped and built again | upstream's EF model carries equivalent indexes |
 | `0005-db-warm-the-connection-pool-and-keep-connectors-aliv.patch` | warm pool floor, keepalives and a pool cap, env-tunable | upstream sets sane pool defaults |
 | `0006-db-auto-prepare-the-hot-statements-so-postgres-stops.patch` | Npgsql `MaxAutoPrepare`, env-tunable | upstream enables auto-prepare |
 | `0007-db-stop-the-7-statement-pool-return-reset-auto-prepa.patch` | `NoResetOnClose`, larger auto-prepare budget | upstream sets sane Npgsql pooling defaults |
-| `0008-db-fail-the-migration-restore-loudly-and-atomically.patch` | `RestoreBackupFast` runs psql with `ON_ERROR_STOP`, `--single-transaction` and `--no-psqlrc`; a missing backup throws | upstream restores atomically and fails on a missing backup |
+| `0008-db-fail-the-migration-restore-loudly-and-atomically.patch` | `RestoreBackupFast` loads the backup into a new database beside the live one (psql with `ON_ERROR_STOP`, `--single-transaction`, `--no-psqlrc`) and swaps the two by renaming, keeping the failed pass as `<db>_failed_<stamp>`; nothing is dropped. The backup is taken without `--clean`. A missing backup throws | upstream restores without dropping the live database and fails on a missing backup |
 | `0009-db-check-pg_dump-against-the-server-major-before-the.patch` | `MigrationBackupFast` compares the `pg_dump --version` major with the server major before dumping | upstream checks the client version itself |
 | `0010-migrations-survive-the-revert-Jellyfin-12.1-runs-ove.patch` | `Down()` of `20260522092303_AddNormalizedUsername` also deletes the `20260522092304_UpdateNormalizedUsername` history row; `Down()` of `20260128200059_10.11.6-1` reverts only the ParentId foreign key | upstream ships equivalent `Down()` changes |
 | `0011-migrations-model-snapshot-for-the-Jellyfin-12.1-sche.patch` | the EF model snapshot of the 12.1 model | upstream ships its own 12.x migrations |
@@ -70,6 +70,7 @@ How it was checked: each Designer target model is the previous one plus its step
 - 12.1 calls `RunScheduledOptimisation` right after every migration batch, `--mode MigrateSystem` included, so `VACUUM ANALYZE` and the hardening statements run at the end of each migration pass, not only on the scheduled task.
 - Migrations run under the provider's command timeout (`POSTGRES_COMMAND_TIMEOUT`, default 30 s). The heaviest 12.1 step, the `BaseItems` rewrite for the uuid columns plus its index rebuilds, took under 3 s on a 48k-item library; raise the timeout for the migration pass on libraries an order of magnitude larger.
 - The rollback restore (patch 0008) is strict, so the dump must load cleanly into the server it came from. pg_dump 17+ writes `SET transaction_timeout`, which PostgreSQL 16 and older reject: with a client newer than the server the rollback now fails instead of limping through. Keep the client major equal to the server major; patch 0009 refuses an older client and warns about a newer one.
+- The rollback restore (patch 0008) creates a second database, so the role needs `CREATEDB`: the bootstrap superuser the official postgres image creates has it, a non-superuser owner role must be granted it. The swap ends the other sessions on the database first, which needs superuser, `pg_signal_backend` or the same role; otherwise the swap gives up after 10 attempts and leaves the configured database unchanged. The server needs free disk for a second full copy of the database while both exist, and the failed pass (`<db>_failed_<stamp>`) stays until an operator removes it. The new database takes the server's default encoding and locale, and database-level settings of the original (`ALTER DATABASE ... SET`, database grants, comments) are not carried over. Extensions come back from the dump's `CREATE EXTENSION` statements; untrusted ones (`pg_stat_statements`, `pg_buffercache`, `pg_prewarm`, `amcheck`) need a superuser. The maintenance database must be named `postgres`, and the database name must leave room for the 23-byte suffix within PostgreSQL's 63-byte identifier limit.
 
 ## 0004 schema hardening via the scheduled optimiser
 
@@ -123,6 +124,23 @@ change rather than a slowdown; it is codified so the plan stays the one that
 was measured. Verify after the next optimiser run: `SELECT indexrelname,
 idx_scan FROM pg_stat_user_indexes WHERE relname IN ('BaseItems','UserData')`
 should list the two codified indexes and none of the five dropped ones.
+
+A `CREATE INDEX CONCURRENTLY` that is cancelled or fails (statement or lock
+timeout, a restart mid-build) leaves an INVALID index behind, and `IF NOT
+EXISTS` then skips it on every later pass: the planner never uses it while
+writes keep maintaining it. Before each `CREATE INDEX CONCURRENTLY IF NOT
+EXISTS "<name>"` the loop now reads `SELECT NOT i.indisvalid FROM pg_index i
+WHERE i.indexrelid = to_regclass(quote_ident(@name))` as a plain ADO.NET
+command on the context's connection, so the second level cache interceptor
+never sees the probe; an invalid index is logged at Warning, dropped with
+`DROP INDEX CONCURRENTLY IF EXISTS` and built again, inside the same
+per-statement try/catch. Checked on PostgreSQL 18.6 over a restored copy of
+the production database: a `CREATE INDEX CONCURRENTLY` of
+`IX_BaseItems_OriginalTitle_lower_trgm` cancelled by a 20 ms
+`statement_timeout` left `indisvalid = false`, a plain `IF NOT EXISTS` run
+skipped it and it stayed invalid, and one `RunScheduledOptimisation` pass
+logged the rebuild and left it valid. An index that keeps timing out is
+rebuilt, and left invalid again, on every pass until the timeout is raised.
 
 12.1 adds indexes that overlap three of ours without matching them:
 (TopParentId, MediaType, IsVirtualItem, DateCreated) next to latest_path,
@@ -187,22 +205,60 @@ AutoPrepareMinUsages to 2, because pg_stat_statements holds 540 distinct
 statements and 25 slots evicts the working set. Drop when: upstream sets sane
 Npgsql pooling defaults.
 
-## 0008 atomic, fail-loud migration restore
+## 0008 migration restore beside the database, then swap
 
 `RestoreBackupFast` is the only rollback the migration service has on
-PostgreSQL: when a migration fails, it replays the pre-migration pg_dump
-(`--clean --if-exists`) with psql. psql continues after a failed statement
-and exits 0, so a restore that broke half way logged success over a
-half-restored database. It now runs with `ON_ERROR_STOP=1`, in one
-transaction that rolls back on the first error, and without `~/.psqlrc`; a
+PostgreSQL: when a migration fails, it restores the pre-migration pg_dump.
+Upstream replays a `--clean --if-exists` dump over the live database with
+psql, which continues after a failed statement and exits 0, so a restore
+that broke half way logged success over a half-restored database. Making it
+strict (`ON_ERROR_STOP=1`, one transaction) was not enough: once any 12.1
+step has committed, the dump cannot drop `PK_BaseItems` while the foreign
+keys 12.1 creates (`FK_LinkedChildren_BaseItems_ChildId`,
+`FK_LinkedChildren_BaseItems_ParentId`, `FK_BaseItems_BaseItems_OwnerId`)
+depend on it, so the rollback failed with psql exit 3 on every pass that got
+past its first step (seen in the 12.1 rehearsal with a forced failure).
+
+The restore now never touches the live database until it has a complete
+copy, and never drops anything:
+
+1. From the maintenance database `postgres` (same host, port, user and
+   password), `CREATE DATABASE "<db>_restore_<utc stamp>" OWNER "<user>"
+   TEMPLATE template0`.
+2. psql loads the backup into that database with `ON_ERROR_STOP=1`,
+   `--single-transaction` and `--no-psqlrc`, draining both pipes. If it
+   fails, the configured database is unchanged, the error and the leftover
+   restore database are logged, and the restore throws.
+3. The pools are cleared, `<db>` is renamed to `<db>_failed_<stamp>` and
+   the restore database to `<db>`. Each rename first ends the other sessions
+   on its database (`pg_terminate_backend` over `pg_stat_activity`) and is
+   retried up to 10 times, 1 s apart, because monitoring sidecars reconnect
+   on every scrape. If the second rename fails, the failed pass is renamed
+   back so the server always finds a database.
+4. Warnings name the database that now holds the backup and the one that
+   holds the failed pass, which stays for the operator.
+
+The backup is taken without `--clean --if-exists`: it only ever loads into
+an empty database, so it carries no statement that drops anything. A
 missing backup file throws, so the service reports the rollback as failed
-(manual intervention) instead of as attempted. Checked against a pg_dump 18
-dump of a migrated 12.1 database: the strict restore completes (exit 0), and
-a statement failing at the end of the file exits 3 and leaves the database
-untouched. Ceiling: see the client/server bullet above; the single
-transaction also waits behind any other session holding locks on the tables
-it drops, so stop the serving pods before a migration pass. Drop when:
-upstream restores atomically.
+(manual intervention) instead of as attempted.
+
+Checked on PostgreSQL 18.6 with the provider methods driven directly: the
+production dump restored, pg_trgm and a trigram index added, the backup
+taken by `MigrationBackupFast` (it contains no DROP statement), then the
+12.1 shape committed (OwnerId to uuid plus `FK_BaseItems_BaseItems_OwnerId`,
+`LinkedChildren` with 738 rows and its two foreign keys, a history row,
+1,182 renamed items) with a live session on the database. One
+`RestoreBackupFast` call left `<db>` with a schema-only dump byte-identical
+to the pre-migration one and to a clean restore of the same backup,
+identical row counts in all 31 tables, an identical data-only dump, all six
+extensions, and the failed pass in `<db>_failed_<stamp>` with its
+`LinkedChildren`. The server's statement log for the window has no DROP
+statement. A session that reconnected after being ended made the first
+rename fail with 55006 and the second attempt succeed; a backup that fails
+half way left `<db>` unchanged and the empty restore database behind.
+Ceilings: see the two restore bullets above. Drop when: upstream restores
+without dropping the live database.
 
 ## 0009 pg_dump version check before the migration backup
 
