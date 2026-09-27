@@ -25,10 +25,10 @@ state must clean it up itself or revisit this.
  1 file changed, 19 insertions(+), 2 deletions(-)
 
 diff --git a/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs b/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs
-index 1f5c94a..ca50c42 100644
+index 2b283d7..bc82bff 100644
 --- a/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs
 +++ b/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs
-@@ -373,8 +373,25 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
+@@ -404,8 +404,25 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
              // worse, so a skewed query cannot get silently pinned to a bad
              // generic plan. Bounded cost: N statements per pooled connection
              // (default 25 x MaxPoolSize 15 = 375 worst case).

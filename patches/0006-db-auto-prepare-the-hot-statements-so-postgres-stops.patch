@@ -21,10 +21,10 @@ MaxAutoPrepare x MaxPoolSize per pool.
  1 file changed, 19 insertions(+), 1 deletion(-)
 
 diff --git a/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs b/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs
-index 6c90e35..1f5c94a 100644
+index 091a01a..2b283d7 100644
 --- a/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs
 +++ b/Jellyfin.Plugin.Pgsql/Database/PgSqlDatabaseProvider.cs
-@@ -356,7 +356,25 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
+@@ -387,7 +387,25 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
              MaxPoolSize = EnvInt("POSTGRES_MAX_POOL_SIZE", 15),
              ConnectionIdleLifetime = EnvInt("POSTGRES_CONN_IDLE_LIFETIME", 300),
              KeepAlive = EnvInt("POSTGRES_KEEPALIVE", 30),
