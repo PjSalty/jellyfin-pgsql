@@ -77,6 +77,15 @@ public sealed class ValkeyCacheConfig
     public int WatchedStateTtlSeconds { get; init; } = 20;
 
     /// <summary>
+    /// Gets the bounded capacity of the cache write queue, in queued operations.
+    /// Key: CACHE_WRITE_QUEUE_CAPACITY. Default: 1024.
+    /// Writes and invalidations are applied by a single background consumer so
+    /// request threads never wait on the cache server; on overflow the oldest queued
+    /// operation is dropped (a dropped invalidation escalates to a full cache flush).
+    /// </summary>
+    public int WriteQueueCapacity { get; init; } = 1024;
+
+    /// <summary>
     /// Gets the tables excluded from caching. Key: CACHE_EXCLUDED_TABLES (comma separated).
     /// Default: security relevant and insert heavy tables, see <see cref="DefaultExcludedTables"/>.
     /// </summary>
@@ -119,6 +128,7 @@ public sealed class ValkeyCacheConfig
             TtlMinutes = Clamp(ReadInt(options, "CACHE_TTL_MINUTES", 30), 1, int.MaxValue, 30),
             CatalogueTtlMinutes = Clamp(ReadInt(options, "CACHE_CATALOGUE_TTL_MINUTES", 360), 1, int.MaxValue, 360),
             WatchedStateTtlSeconds = Clamp(ReadInt(options, "CACHE_WATCHED_TTL_SECONDS", 20), 1, 3600, 20),
+            WriteQueueCapacity = Clamp(ReadInt(options, "CACHE_WRITE_QUEUE_CAPACITY", 1024), 16, 1048576, 1024),
             ExcludedTables = ReadList(options, "CACHE_EXCLUDED_TABLES", DefaultExcludedTables),
             KeyPrefix = Read(options, "CACHE_KEY_PREFIX") ?? "JF_",
             Compression = ReadBool(options, "CACHE_COMPRESSION", defaultValue: true),

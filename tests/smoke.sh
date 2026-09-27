@@ -92,6 +92,16 @@ hits_after="$(keyspace_hits)"
 [ "${hits_after}" -gt "${hits_before}" ] || die "no cache hits after repeated browse (before=${hits_before} after=${hits_after})"
 [ "$(valkey DBSIZE)" -gt 0 ] || die "valkey holds no cache entries"
 
+info "asserting the write queue is doing the cache writes"
+# The queue starts at plugin startup, not lazily: the library ctor-injects
+# IEFCacheServiceProvider into DbCommandInterceptorProcessor, which is part of
+# the eager graph GetOrCreate resolves via GetRequiredService, so the wrapper
+# and its queue exist (and log the start line) before any command is ever
+# intercepted. The hits/DBSIZE assertions above only pass if queued writes
+# actually reach Valkey, so together these cover the async write path end to
+# end.
+${COMPOSE} logs jellyfin 2>&1 | grep "EF cache write queue started" > /dev/null || die "cache write queue log line missing"
+
 info "asserting the pool params reached the connection string (patch 0004)"
 # The provider logs the resolved connection string at startup (password nulled),
 # so the pool params are directly observable and deterministically checkable --

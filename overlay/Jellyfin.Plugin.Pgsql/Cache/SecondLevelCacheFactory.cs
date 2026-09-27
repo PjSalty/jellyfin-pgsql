@@ -51,11 +51,13 @@ public static class SecondLevelCacheFactory
 
                 // Fail open: a dead Valkey makes operations throw fast, the library's
                 // availability check marks the provider down and queries run uncached.
-                // The timeouts are deliberately LAN-tight: the cache library serializes
-                // every intercepted command through one process-wide lock around
-                // synchronous cache calls, so a SLOW-but-up Valkey stalls the whole DB
-                // pipeline for up to the sync timeout per call. Dead Valkey = fine,
-                // slow Valkey = the timeout below caps the damage.
+                // The timeouts are deliberately LAN-tight: writes and invalidations go
+                // through the CacheWriteQueue and never stall a request thread, but
+                // cache READS are still synchronous inside the library's process-wide
+                // lock, so a SLOW-but-up Valkey stalls the read path for up to the
+                // sync timeout per call. Dead Valkey = fine, slow Valkey = the timeout
+                // below caps the damage per read, and the queue's consumer eats the
+                // same timeout off the request path.
                 AbortOnConnectFail = false,
                 ConnectTimeout = 500,
                 SyncTimeout = 500,
@@ -68,6 +70,11 @@ public static class SecondLevelCacheFactory
 
             var services = new ServiceCollection();
             services.AddLogging(builder => builder.AddProvider(new ForwardingLoggerProvider(logger)));
+
+            // The library resolves the custom cache provider from this same
+            // collection, so registering the config here is what lets
+            // ResilientCacheServiceProvider size its write queue.
+            services.AddSingleton(config);
             services.AddEFSecondLevelCache(options => options
                 .UseStackExchangeRedisCacheProvider(redisOptions, TimeSpan.FromMinutes(config.TtlMinutes), config.Compression)
                 // Must come AFTER UseStackExchangeRedisCacheProvider: that call stores the
@@ -163,6 +170,14 @@ public static class SecondLevelCacheFactory
             return;
         }
 
+        // Queued cache writes still in flight were captured against pre-purge data;
+        // executed after the flush below they would resurrect entries for tables
+        // that no longer hold those rows, so they are discarded first. Any drained
+        // invalidation keeps its tables gated (reads miss) until the flush is
+        // confirmed complete below.
+        var wrapper = _serviceProvider?.GetService<IEFCacheServiceProvider>() as ResilientCacheServiceProvider;
+        wrapper?.DiscardQueuedWrites();
+
         try
         {
             foreach (var endPoint in connection.GetEndPoints())
@@ -170,10 +185,17 @@ public static class SecondLevelCacheFactory
                 connection.GetServer(endPoint).FlushDatabase(_databaseIndex);
             }
 
+            // Only after FlushDatabase returned: a completion reported for a flush
+            // that never ran would release the invalidation gates while the stale
+            // entries they cover are still in the cache.
+            wrapper?.NotifyCacheFlushed();
             logger.LogInformation("Flushed the EF second level cache on Valkey");
         }
         catch (Exception ex)
         {
+            // No completion notification: the gated tables keep reading as misses
+            // and the write queue's consumer retries the flush; TTL remains the
+            // backstop for entries the gate never covered.
             logger.LogWarning(ex, "Failed to flush the EF second level cache, stale entries expire via TTL");
         }
     }
