@@ -6,14 +6,15 @@
 #
 # Build context expects the dotnet publish output at upstream/publish
 # (see build/assemble.sh and the CI pipeline).
-ARG BASE_IMAGE=jellyfin/jellyfin:10.11.11
+ARG BASE_IMAGE=jellyfin/jellyfin:12.1
 FROM ${BASE_IMAGE}
 
 # pg_dump/psql: the provider shells out to them (migration backups before EF
 # migrations run, restore, delete). Without them the server dies at FIRST
 # BOOT with Win32Exception 'pg_dump ... No such file or directory'. PGDG repo
-# because the client major must be >= the PostgreSQL server major (16); the
-# base image's distro ships older.
+# because pg_dump refuses a server of a newer major and the base image's
+# distro ships older. Keep the client major equal to the server's (18): the
+# rollback restore stops on settings an older server does not know.
 # Everything over https: build environments commonly block plain http egress
 # (port 80), and the base image already trusts the system CA bundle. The
 # PGDG key stays ASCII-armored (.asc): apt accepts it in Signed-By and the
@@ -27,7 +28,7 @@ RUN sed -i 's|http://|https://|g' /etc/apt/sources.list.d/debian.sources \
     # Pull the distro security point releases the base image predates; the
     # release Trivy gate fails on fixed-but-unpatched HIGH CVEs otherwise.
     && apt-get upgrade -y --no-install-recommends \
-    && apt-get install -y --no-install-recommends postgresql-client-16 \
+    && apt-get install -y --no-install-recommends postgresql-client-18 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY upstream/publish/ /opt/jellyfin-pgsql/plugin/
