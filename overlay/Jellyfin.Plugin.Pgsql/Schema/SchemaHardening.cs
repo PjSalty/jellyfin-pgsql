@@ -12,6 +12,10 @@ namespace Jellyfin.Plugin.Pgsql.Schema;
 ///    join at 3.2s per request. The constraint makes regrowth impossible.
 ///  - IX_BaseItems_latest_path: filter+sort path for the Latest/browse
 ///    family (images p95 1.04s -&gt; 160ms under k6 load).
+///  - pg_trgm + trigram GIN on CleanName / lower(OriginalTitle): the search
+///    filter's LIKE branches and the relevance ordering's prefix matches
+///    (added 2026-08-29; the plain-term strpos branch needs the server-side
+///    LIKE patch to benefit).
 /// CONCURRENTLY keeps a busy library serving while indexes build; Npgsql
 /// autocommit raw commands satisfy its no-transaction requirement (the
 /// optimiser's VACUUM proves the same property).
@@ -36,6 +40,23 @@ public static class SchemaHardening
         // Ordered partial index so the "newest unwatched item in this library"
         // probe walks newest-first and stops, instead of fetching every candidate
         // and sorting (5,231 rows fetched to return 1, measured).
-        "CREATE INDEX CONCURRENTLY IF NOT EXISTS \"IX_BaseItems_latest_ordered\" ON \"BaseItems\" (\"TopParentId\", \"DateCreated\" DESC) INCLUDE (\"MediaType\") WHERE \"IsFolder\" = false AND \"IsVirtualItem\" = false"
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS \"IX_BaseItems_latest_ordered\" ON \"BaseItems\" (\"TopParentId\", \"DateCreated\" DESC) INCLUDE (\"MediaType\") WHERE \"IsFolder\" = false AND \"IsVirtualItem\" = false",
+
+        // Search. The search filter and its relevance ordering reach BaseItems
+        // through pattern predicates on CleanName and lower(OriginalTitle):
+        // LIKE for wildcard terms and NameContains, a StartsWith (LIKE 'x%')
+        // pair for the relevance CASE, and strpos() for plain terms, which is
+        // how Npgsql translates string.Contains. Measured 2026-08-29 on this
+        // library: /Search/Hints 0.93s alone, 4.8s p50 at 20 concurrent, every
+        // query a sequential scan over BaseItems. Trigram GIN indexes make the
+        // LIKE and prefix forms index-supported; the strpos form cannot use
+        // them until the server emits LIKE for plain terms (jellyfin-fork
+        // patch, tracked there). pg_trgm is a trusted extension since PG13, so
+        // the database owner creates it without superuser; if the role cannot,
+        // the optimiser logs the skipped statement and the two indexes fail
+        // closed the same way.
+        "CREATE EXTENSION IF NOT EXISTS pg_trgm",
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS \"IX_BaseItems_CleanName_trgm\" ON \"BaseItems\" USING gin (\"CleanName\" gin_trgm_ops)",
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS \"IX_BaseItems_OriginalTitle_lower_trgm\" ON \"BaseItems\" USING gin (lower(\"OriginalTitle\") gin_trgm_ops)"
     };
 }

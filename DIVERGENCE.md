@@ -30,7 +30,13 @@ Permissions and Preferences (regrowth guard for the 251k-row bloat that put
 the auth join at 3.2s per request) and IX_BaseItems_latest_path for the
 Latest/browse filter+sort family. Statements live in
 overlay/Jellyfin.Plugin.Pgsql/Schema/SchemaHardening.cs; the patch loops
-them in RunScheduledOptimisation with per-statement try/catch. Ceiling:
+them in RunScheduledOptimisation with per-statement try/catch. 2026-08-29
+adds `pg_trgm` plus trigram GIN indexes on `CleanName` and
+`lower(OriginalTitle)`: the search filter's LIKE branches and the relevance
+ordering's prefix matches were sequential scans (0.93s alone, 4.8s p50 at
+20 concurrent). The plain-term branch is `string.Contains`, which Npgsql
+emits as `strpos()`, so it stays a scan until jellyfin-fork makes the server
+emit LIKE there; that half is tracked in the fork's DIVERGENCE. Ceiling:
 none, this is durable schema. Drop when: upstream adds equivalent
 indexes/constraints to the EF model (offer the migration upstream).
 
