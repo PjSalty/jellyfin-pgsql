@@ -6,7 +6,7 @@
 #
 # Build context expects the dotnet publish output at upstream/publish
 # (see build/assemble.sh and the CI pipeline).
-ARG BASE_IMAGE=jellyfin/jellyfin:12.1
+ARG BASE_IMAGE=jellyfin/jellyfin:12.2
 FROM ${BASE_IMAGE}
 
 # pg_dump/psql: the provider shells out to them (migration backups before EF

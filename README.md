@@ -21,13 +21,13 @@ Security relevant tables are never cached (default exclude list): `Users`, `Perm
 Grab the [latest release](https://github.com/PjSalty/jellyfin-pgsql/releases/latest) and unpack it into Jellyfin's plugin folder:
 
 ```bash
-curl -LO https://github.com/PjSalty/jellyfin-pgsql/releases/download/12.1-0-salty.1/jellyfin-pgsql-12.1-0-salty.1.zip
-curl -LO https://github.com/PjSalty/jellyfin-pgsql/releases/download/12.1-0-salty.1/SHA256SUMS
+curl -LO https://github.com/PjSalty/jellyfin-pgsql/releases/download/12.2-0-salty.1/jellyfin-pgsql-12.2-0-salty.1.zip
+curl -LO https://github.com/PjSalty/jellyfin-pgsql/releases/download/12.2-0-salty.1/SHA256SUMS
 sha256sum -c SHA256SUMS
-unzip jellyfin-pgsql-12.1-0-salty.1.zip -d /path/to/config/plugins/PostgreSQL
+unzip jellyfin-pgsql-12.2-0-salty.1.zip -d /path/to/config/plugins/PostgreSQL
 ```
 
-Release tags read `<server>-<upstream plugin release>-salty.<rev>`: `12.1-0-salty.1` is built for Jellyfin 12.1, from a pinned upstream commit because upstream has no 12.x release yet (the `0`), and is this repo's first revision for that pair. The 10.11 line used the same scheme, e.g. `10.11.11-1-salty.1`. Match the server part to your server.
+Release tags read `<server>-<upstream plugin release>-salty.<rev>`: `12.2-0-salty.1` is built for Jellyfin 12.2, from a pinned upstream commit because upstream has no 12.x release yet (the `0`), and is this repo's first revision for that pair. The 10.11 line used the same scheme, e.g. `10.11.11-1-salty.1`. Match the server part to your server.
 
 The server needs the PostgreSQL client tools (`pg_dump`, `psql`) at the same major as the database: every migration pass starts with a `pg_dump` backup, `pg_dump` refuses a newer server, and the rollback restore stops on settings an older server does not know. `docker/Dockerfile` installs `postgresql-client-18`. If a migration fails, the rollback restores that backup into a new database beside yours and swaps the names, keeping the failed pass as `<db>_failed_<timestamp>` for you to inspect and remove; the database role needs `CREATEDB` and the server needs room for a second copy of the database (see DIVERGENCE.md, patch 0008).
 
@@ -64,7 +64,8 @@ Run Valkey as a cache, not a datastore: `--maxmemory-policy volatile-lru`, persi
 
 | This repo | Upstream plugin | Jellyfin server | EF Core | PostgreSQL client |
 |---|---|---|---|---|
-| main, `12.1-0-salty.N` | master `80101b9` (10.11.11-1 + #40 + #41), 12.1 port in this repo | 12.1 | 10.0.11 | 18 |
+| main, `12.2-0-salty.N` | master `80101b9` (10.11.11-1 + #40 + #41), 12.x port in this repo | 12.2 | 10.0.11 | 18 |
+| `12.1-0-salty.N` | master `80101b9` (10.11.11-1 + #40 + #41), 12.x port in this repo | 12.1 | 10.0.11 | 18 |
 | `10.11.11-1-salty.N` | 10.11.11-1 | 10.11.11 | 9.0.11 | 16 |
 
 The plugin version is tied to the server version by upstream. When Jellyfin releases, prefer the matching upstream plugin release; when there is none, pin an upstream commit and carry the server port here, as for 12.1. Bump `UPSTREAM_REF` and let CI tell you whether the patches still apply.

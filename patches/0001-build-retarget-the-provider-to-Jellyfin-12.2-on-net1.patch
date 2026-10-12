@@ -1,15 +1,15 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Salty <99386653+PjSalty@users.noreply.github.com>
 Date: Sat, 26 Sep 2026 19:12:07 -0500
-Subject: [PATCH 01/11] build: retarget the provider to Jellyfin 12.1 on
+Subject: [PATCH 01/11] build: retarget the provider to Jellyfin 12.2 on
  net10.0
 
-Intent: build against the 12.1 server: net10.0, Jellyfin.Controller and
-Jellyfin.Model 12.1.0, EF Core and Microsoft.Extensions at the host's exact
+Intent: build against the 12.2 server: net10.0, Jellyfin.Controller and
+Jellyfin.Model 12.2.0, EF Core and Microsoft.Extensions at the host's exact
 10.0.11 pins (PrivateAssets all, so none of them ship in the plugin folder),
-Npgsql and its EF provider 10.0.3, dotnet-ef 10.0.11, and the 12.1 ABI in
-build.yaml. IJellyfinDatabaseProvider is unchanged between 10.11.11 and 12.1,
-so no provider source changes are needed. The .NET 10 SDK adds CA1873
+Npgsql and its EF provider 10.0.3, dotnet-ef 10.0.11, and the 12.2 ABI in
+build.yaml. IJellyfinDatabaseProvider gained RefreshStatistics at 12.2 with a
+default no-op body, so no provider source changes are needed. The .NET 10 SDK adds CA1873
 (potentially expensive logging), which fails eight upstream log calls under
 AllEnabledByDefault plus TreatWarningsAsErrors; the ruleset lowers it to
 Info, the same way the 12.1 server lowers it to a suggestion.
@@ -72,8 +72,8 @@ index a19f066..9413815 100644
 -    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="9.0.11" PrivateAssets="all" />
 -    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="9.0.11" PrivateAssets="all" />
 -    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="9.0.11">
-+    <PackageReference Include="Jellyfin.Controller" Version="12.1.0" PrivateAssets="all" />
-+    <PackageReference Include="Jellyfin.Model" Version="12.1.0" PrivateAssets="all" />
++    <PackageReference Include="Jellyfin.Controller" Version="12.2.0" PrivateAssets="all" />
++    <PackageReference Include="Jellyfin.Model" Version="12.2.0" PrivateAssets="all" />
 +    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
 +    <PackageReference Include="Npgsql" Version="10.0.3" />
 +    <PackageReference Include="Microsoft.EntityFrameworkCore.Abstractions" Version="10.0.11" PrivateAssets="all" />
@@ -107,7 +107,7 @@ index 8f4d32e..8c6ce91 100644
  version: "1.0.0.0"
 -targetAbi: "10.11.0.0"
 -framework: "net9.0"
-+targetAbi: "12.1.0.0"
++targetAbi: "12.2.0.0"
 +framework: "net10.0"
  overview: "PostgreSQL database provider for Jellyfin"
  description: >
