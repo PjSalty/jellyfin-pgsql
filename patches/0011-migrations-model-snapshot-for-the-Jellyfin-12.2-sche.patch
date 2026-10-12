@@ -1,22 +1,22 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Salty <99386653+PjSalty@users.noreply.github.com>
 Date: Sat, 26 Sep 2026 19:30:56 -0500
-Subject: [PATCH 11/11] migrations: model snapshot for the Jellyfin 12.1 schema
+Subject: [PATCH 11/11] migrations: model snapshot for the Jellyfin 12.2 schema
 
-Intent: the EF model snapshot for the 12.1 model, as dotnet ef 10.0.11
-generates it through the plugin's design-time factory. It pairs with the 17
+Intent: the EF model snapshot for the 12.2 model, as dotnet ef 10.0.11
+generates it through the plugin's design-time factory. It pairs with the 18
 PostgreSQL migrations in overlay/Migrations, whose ids equal upstream's
-SQLite ids added between 10.11.11 and 12.1; the last one's target model is
+SQLite ids added between 10.11.11 and 12.2; the last one's target model is
 this snapshot, and adding a migration on top scaffolds nothing.
 Drop when: upstream ships its own 12.x migrations and snapshot.
 Ceiling: regenerate it with dotnet ef, never by hand, whenever the server
 model moves.
 ---
- .../JellyfinDbContextModelSnapshot.cs         | 156 +++++++++++++-----
- 1 file changed, 116 insertions(+), 40 deletions(-)
+ .../JellyfinDbContextModelSnapshot.cs         | 158 +++++++++++++-----
+ 1 file changed, 118 insertions(+), 40 deletions(-)
 
 diff --git a/Jellyfin.Plugin.Pgsql/Migrations/JellyfinDbContextModelSnapshot.cs b/Jellyfin.Plugin.Pgsql/Migrations/JellyfinDbContextModelSnapshot.cs
-index 04b0f16..8a29eb3 100644
+index 04b0f16..78ac84a 100644
 --- a/Jellyfin.Plugin.Pgsql/Migrations/JellyfinDbContextModelSnapshot.cs
 +++ b/Jellyfin.Plugin.Pgsql/Migrations/JellyfinDbContextModelSnapshot.cs
 @@ -18,7 +18,7 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
@@ -69,13 +69,14 @@ index 04b0f16..8a29eb3 100644
  
                      b.Property<string>("ProductionLocations")
                          .HasColumnType("text");
-@@ -365,26 +365,54 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
+@@ -365,26 +365,56 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
  
                      b.HasKey("Id");
  
 +                    b.HasIndex("Name");
 +
-+                    b.HasIndex("OwnerId");
++                    b.HasIndex("OwnerId")
++                        .HasFilter("\"OwnerId\" IS NOT NULL");
 +
                      b.HasIndex("ParentId");
  
@@ -92,7 +93,8 @@ index 04b0f16..8a29eb3 100644
 +
 +                    b.HasIndex("SeriesName");
 +
-+                    b.HasIndex("ExtraType", "OwnerId");
++                    b.HasIndex("ExtraType", "OwnerId")
++                        .HasFilter("\"ExtraType\" IS NOT NULL");
 +
                      b.HasIndex("TopParentId", "Id");
  
@@ -126,7 +128,7 @@ index 04b0f16..8a29eb3 100644
                      b.HasIndex("Type", "SeriesPresentationUniqueKey", "PresentationUniqueKey", "SortName");
  
                      b.HasIndex("IsFolder", "TopParentId", "IsVirtualItem", "PresentationUniqueKey", "DateCreated");
-@@ -404,7 +432,7 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
+@@ -404,7 +434,7 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                              IsRepeat = false,
                              IsSeries = false,
                              IsVirtualItem = false,
@@ -135,7 +137,7 @@ index 04b0f16..8a29eb3 100644
                              Type = "PLACEHOLDER"
                          });
                  });
-@@ -439,7 +467,7 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
+@@ -439,7 +469,7 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
  
                      b.HasKey("Id");
  
@@ -144,7 +146,7 @@ index 04b0f16..8a29eb3 100644
  
                      b.ToTable("BaseItemImageInfos");
                  });
-@@ -473,7 +501,7 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
+@@ -473,7 +503,7 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
  
                      b.HasKey("ItemId", "ProviderId");
  
@@ -153,7 +155,7 @@ index 04b0f16..8a29eb3 100644
  
                      b.ToTable("BaseItemProviders");
                  });
-@@ -766,6 +794,29 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
+@@ -766,6 +796,29 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                      b.ToTable("KeyframeData");
                  });
  
@@ -183,7 +185,7 @@ index 04b0f16..8a29eb3 100644
              modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.MediaSegment", b =>
                  {
                      b.Property<Guid>("Id")
-@@ -888,6 +939,9 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
+@@ -888,6 +941,9 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                      b.Property<bool?>("IsInterlaced")
                          .HasColumnType("boolean");
  
@@ -193,7 +195,7 @@ index 04b0f16..8a29eb3 100644
                      b.Property<string>("KeyFrames")
                          .HasColumnType("text");
  
-@@ -938,13 +992,7 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
+@@ -938,13 +994,7 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
  
                      b.HasKey("ItemId", "StreamIndex");
  
@@ -208,7 +210,7 @@ index 04b0f16..8a29eb3 100644
  
                      b.ToTable("MediaStreamInfos");
                  });
-@@ -988,12 +1036,12 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
+@@ -988,12 +1038,12 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
  
                      b.HasKey("ItemId", "PeopleId", "Role");
  
@@ -223,7 +225,7 @@ index 04b0f16..8a29eb3 100644
                      b.ToTable("PeopleBaseItemMap");
                  });
  
-@@ -1008,14 +1056,11 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
+@@ -1008,14 +1058,11 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                      b.Property<int>("Kind")
                          .HasColumnType("integer");
  
@@ -239,7 +241,7 @@ index 04b0f16..8a29eb3 100644
                          .HasColumnType("uuid");
  
                      b.Property<bool>("Value")
-@@ -1024,8 +1069,7 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
+@@ -1024,8 +1071,7 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                      b.HasKey("Id");
  
                      b.HasIndex("UserId", "Kind")
@@ -249,7 +251,7 @@ index 04b0f16..8a29eb3 100644
  
                      b.ToTable("Permissions");
                  });
-@@ -1041,14 +1085,11 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
+@@ -1041,14 +1087,11 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                      b.Property<int>("Kind")
                          .HasColumnType("integer");
  
@@ -265,7 +267,7 @@ index 04b0f16..8a29eb3 100644
                          .HasColumnType("uuid");
  
                      b.Property<string>("Value")
-@@ -1059,8 +1100,7 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
+@@ -1059,8 +1102,7 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                      b.HasKey("Id");
  
                      b.HasIndex("UserId", "Kind")
@@ -275,7 +277,7 @@ index 04b0f16..8a29eb3 100644
  
                      b.ToTable("Preferences");
                  });
-@@ -1145,8 +1185,6 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
+@@ -1145,8 +1187,6 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
  
                      b.HasKey("Id");
  
@@ -284,7 +286,7 @@ index 04b0f16..8a29eb3 100644
                      b.HasIndex("AccessToken", "DateLastActivity");
  
                      b.HasIndex("DeviceId", "DateLastActivity");
-@@ -1376,8 +1414,6 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
+@@ -1376,8 +1416,6 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
  
                      b.HasKey("ItemId", "UserId", "CustomDataKey");
  
@@ -293,7 +295,7 @@ index 04b0f16..8a29eb3 100644
                      b.HasIndex("ItemId", "UserId", "IsFavorite");
  
                      b.HasIndex("ItemId", "UserId", "LastPlayedDate");
-@@ -1386,6 +1422,12 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
+@@ -1386,6 +1424,12 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
  
                      b.HasIndex("ItemId", "UserId", "Played");
  
@@ -306,7 +308,7 @@ index 04b0f16..8a29eb3 100644
                      b.ToTable("UserData");
                  });
  
-@@ -1430,12 +1472,19 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
+@@ -1430,12 +1474,19 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
  
              modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.BaseItemEntity", b =>
                  {
@@ -326,7 +328,7 @@ index 04b0f16..8a29eb3 100644
                  });
  
              modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.BaseItemImageInfo", b =>
-@@ -1558,6 +1607,25 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
+@@ -1558,6 +1609,25 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                      b.Navigation("Item");
                  });
  
@@ -352,7 +354,7 @@ index 04b0f16..8a29eb3 100644
              modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.MediaStreamInfo", b =>
                  {
                      b.HasOne("Jellyfin.Database.Implementations.Entities.BaseItemEntity", "Item")
-@@ -1593,7 +1661,8 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
+@@ -1593,7 +1663,8 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                      b.HasOne("Jellyfin.Database.Implementations.Entities.User", null)
                          .WithMany("Permissions")
                          .HasForeignKey("UserId")
@@ -362,7 +364,7 @@ index 04b0f16..8a29eb3 100644
                  });
  
              modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.Preference", b =>
-@@ -1601,7 +1670,8 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
+@@ -1601,7 +1672,8 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                      b.HasOne("Jellyfin.Database.Implementations.Entities.User", null)
                          .WithMany("Preferences")
                          .HasForeignKey("UserId")
@@ -372,7 +374,7 @@ index 04b0f16..8a29eb3 100644
                  });
  
              modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.Security.Device", b =>
-@@ -1642,10 +1712,16 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
+@@ -1642,10 +1714,16 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
  
                      b.Navigation("DirectChildren");
  
