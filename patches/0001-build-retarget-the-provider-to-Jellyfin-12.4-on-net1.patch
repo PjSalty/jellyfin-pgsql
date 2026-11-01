@@ -1,13 +1,13 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Salty <99386653+PjSalty@users.noreply.github.com>
 Date: Sat, 26 Sep 2026 19:12:07 -0500
-Subject: [PATCH 01/11] build: retarget the provider to Jellyfin 12.2 on
+Subject: [PATCH 01/11] build: retarget the provider to Jellyfin 12.4 on
  net10.0
 
-Intent: build against the 12.2 server: net10.0, Jellyfin.Controller and
-Jellyfin.Model 12.2.0, EF Core and Microsoft.Extensions at the host's exact
-10.0.11 pins (PrivateAssets all, so none of them ship in the plugin folder),
-Npgsql and its EF provider 10.0.3, dotnet-ef 10.0.11, and the 12.2 ABI in
+Intent: build against the 12.4 server: net10.0, Jellyfin.Controller and
+Jellyfin.Model 12.4.0, EF Core and Microsoft.Extensions at the host's exact
+10.0.14 pins (PrivateAssets all, so none of them ship in the plugin folder),
+Npgsql and its EF provider 10.0.3, dotnet-ef 10.0.14, and the 12.4 ABI in
 build.yaml. IJellyfinDatabaseProvider gained RefreshStatistics at 12.2 with a
 default no-op body, so no provider source changes are needed. The .NET 10 SDK adds CA1873
 (potentially expensive logging), which fails eight upstream log calls under
@@ -26,7 +26,7 @@ APIs the host does not have.
  4 files changed, 25 insertions(+), 22 deletions(-)
 
 diff --git a/.config/dotnet-tools.json b/.config/dotnet-tools.json
-index ee846c9..6030b24 100644
+index ee846c9..5e9fe39 100644
 --- a/.config/dotnet-tools.json
 +++ b/.config/dotnet-tools.json
 @@ -3,7 +3,7 @@
@@ -34,12 +34,12 @@ index ee846c9..6030b24 100644
    "tools": {
      "dotnet-ef": {
 -      "version": "9.0.11",
-+      "version": "10.0.11",
++      "version": "10.0.14",
        "commands": [
          "dotnet-ef"
        ],
 diff --git a/Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj b/Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj
-index a19f066..9413815 100644
+index a19f066..05cb64f 100644
 --- a/Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj
 +++ b/Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj
 @@ -1,7 +1,7 @@
@@ -72,33 +72,33 @@ index a19f066..9413815 100644
 -    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="9.0.11" PrivateAssets="all" />
 -    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="9.0.11" PrivateAssets="all" />
 -    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="9.0.11">
-+    <PackageReference Include="Jellyfin.Controller" Version="12.2.0" PrivateAssets="all" />
-+    <PackageReference Include="Jellyfin.Model" Version="12.2.0" PrivateAssets="all" />
++    <PackageReference Include="Jellyfin.Controller" Version="12.4.0" PrivateAssets="all" />
++    <PackageReference Include="Jellyfin.Model" Version="12.4.0" PrivateAssets="all" />
 +    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
 +    <PackageReference Include="Npgsql" Version="10.0.3" />
-+    <PackageReference Include="Microsoft.EntityFrameworkCore.Abstractions" Version="10.0.11" PrivateAssets="all" />
-+    <PackageReference Include="Microsoft.Extensions.Caching.Abstractions" Version="10.0.11" PrivateAssets="all" />
-+    <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="10.0.11" PrivateAssets="all" />
-+    <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.11" PrivateAssets="all" />
-+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.11" PrivateAssets="all" />
-+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.11" PrivateAssets="all" />
-+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.11" PrivateAssets="all" />
-+    <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.11" PrivateAssets="all" />
-+    <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.11" PrivateAssets="all" />
-+    <PackageReference Include="Microsoft.Extensions.Primitives" Version="10.0.11" PrivateAssets="all" />
-+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.11" PrivateAssets="all" />
-+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.11" PrivateAssets="all" />
-+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.11">
++    <PackageReference Include="Microsoft.EntityFrameworkCore.Abstractions" Version="10.0.14" PrivateAssets="all" />
++    <PackageReference Include="Microsoft.Extensions.Caching.Abstractions" Version="10.0.14" PrivateAssets="all" />
++    <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="10.0.14" PrivateAssets="all" />
++    <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.14" PrivateAssets="all" />
++    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.14" PrivateAssets="all" />
++    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.14" PrivateAssets="all" />
++    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.14" PrivateAssets="all" />
++    <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.14" PrivateAssets="all" />
++    <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.14" PrivateAssets="all" />
++    <PackageReference Include="Microsoft.Extensions.Primitives" Version="10.0.14" PrivateAssets="all" />
++    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.14" PrivateAssets="all" />
++    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.14" PrivateAssets="all" />
++    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.14">
        <PrivateAssets>all</PrivateAssets>
        <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
      </PackageReference>
 -    <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="9.0.11">
-+    <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="10.0.11">
++    <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="10.0.14">
        <PrivateAssets>all</PrivateAssets>
        <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
      </PackageReference>
 diff --git a/build.yaml b/build.yaml
-index 8f4d32e..8c6ce91 100644
+index 8f4d32e..fb133e3 100644
 --- a/build.yaml
 +++ b/build.yaml
 @@ -2,8 +2,8 @@
@@ -107,7 +107,7 @@ index 8f4d32e..8c6ce91 100644
  version: "1.0.0.0"
 -targetAbi: "10.11.0.0"
 -framework: "net9.0"
-+targetAbi: "12.2.0.0"
++targetAbi: "12.4.0.0"
 +framework: "net10.0"
  overview: "PostgreSQL database provider for Jellyfin"
  description: >
@@ -127,5 +127,5 @@ index 8af791c..aecb05e 100644
              If so, remove the code from the assembly.
              If this class is intended to contain only static members, make it static -->
 -- 
-2.55.0
+2.56.0
 
