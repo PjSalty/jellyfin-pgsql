@@ -11,17 +11,18 @@ Ceiling: pinned at 5.5.1 because the plugin's AsyncKeyedLock must equal the
 server's (8.0.2 at 12.1): the host loads its own copy into the default load
 context first and a higher plugin reference fails to bind. 5.3.11 through
 5.5.1 reference exactly 8.0.2; 5.5.2 needs 8.1.2. Bump only together with the
-server's AsyncKeyedLock pin. The transitive MessagePack 3.1.8 is above every
-MessagePack advisory's fixed version (3.1.7), so no direct MessagePack pin.
+server's AsyncKeyedLock pin. MessagePack is pinned directly at 3.1.12: the
+transitive 3.1.8 is inside GHSA-qhrr-8q5h-9q3h (fixed in 3.1.9), and the host
+does not load MessagePack, so the direct pin cannot collide with it.
 ---
- .../Jellyfin.Plugin.Pgsql.csproj                  | 15 +++++++++++++++
- 1 file changed, 15 insertions(+)
+ .../Jellyfin.Plugin.Pgsql.csproj               | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
 
 diff --git a/Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj b/Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj
-index 9413815..d1e1ec3 100644
+index 05cb64f..acaf88b 100644
 --- a/Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj
 +++ b/Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj
-@@ -37,6 +37,21 @@
+@@ -37,6 +37,24 @@
      </PackageReference>
    </ItemGroup>
  
@@ -34,15 +35,18 @@ index 9413815..d1e1ec3 100644
 +         observed live on the 10.11 host). 5.3.11 through 5.5.1 reference
 +         exactly 8.0.2; 5.5.2 moves to 8.1.2. Bump only together with the
 +         server's AsyncKeyedLock pin. The Redis provider brings
-+         StackExchange.Redis 3.2.1 and MessagePack 3.1.8, above every
-+         MessagePack advisory's fixed version, so no direct pin is needed. -->
++         StackExchange.Redis 3.2.1 and MessagePack 3.1.8; 3.1.8 is inside
++         GHSA-qhrr-8q5h-9q3h (>= 3.0.0, < 3.1.9), so MessagePack is pinned
++         directly at 3.1.12. The host does not load MessagePack, so the
++         plugin's copy is the only one. -->
 +    <PackageReference Include="EFCoreSecondLevelCacheInterceptor" Version="5.5.1" />
 +    <PackageReference Include="EFCoreSecondLevelCacheInterceptor.StackExchange.Redis" Version="5.5.1" />
++    <PackageReference Include="MessagePack" Version="3.1.12" />
 +  </ItemGroup>
 +
    <ItemGroup>
      <PackageReference Include="SerilogAnalyzer" Version="0.15.0" PrivateAssets="All" />
      <PackageReference Include="StyleCop.Analyzers" Version="1.2.0-beta.556" PrivateAssets="All" />
 -- 
-2.55.0
+2.56.0
 
